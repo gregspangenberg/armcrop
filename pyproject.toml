@@ -7,7 +7,16 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.12"
+simpleitk = "^2.4.0"
+numpy = "^2.1.1"
+pandas = "^2.2.3"
+networkx = "^3.3"
+onnxruntime = "^1.19.2"
 
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
+matplotlib = "^3.9.2"
 
 [build-system]
 requires = ["poetry-core"]
