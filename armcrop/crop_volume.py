@@ -9,6 +9,15 @@ from typing import List
 import SimpleITK as sitk
 import onnxruntime as rt
 import time
+import huggingface_hub
+
+
+def get_model():
+    model_path = huggingface_hub.hf_hub_download(
+        repo_id="gregspangenberg/armcrop",
+        filename="yolov9c_upperlimb.onnx",
+    )
+    return model_path
 
 
 def i_within_x_mm(target_i, mm, spacing, start_i, stop_i):
@@ -193,7 +202,7 @@ def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
 
 def load_model(img_size):
     # load model
-    with open("models/yolov9c_upperlimb.onnx", "rb") as file:
+    with open(get_model(), "rb") as file:
         # use cuda if available
         try:
             model = rt.InferenceSession(
@@ -389,6 +398,10 @@ def post_process_volume(
     return crop_classes
 
 
+def save_volume(vol, path):
+    sitk.WriteImage(vol, path)
+
+
 class Crop2Bone:
     """Crops the volume to the bounding box of the bone of interest"""
 
@@ -443,19 +456,11 @@ if __name__ == "__main__":
     t0 = time.time()
 
     volume_path = pathlib.Path("/mnt/slowdata/cadaveric-full-arm/S221830/S221830.nrrd")
-    # clinic = pathlib.Path("/mnt/slowdata/arthritic-clinical-half-arm")
-    # volume_pathes = clinic.rglob("*.nrrd")
-    # volume_pathes = sorted([i for i in volume_pathes if ".seg.nrrd" not in str(i)])
 
-    # for volume_path  in volume_pathes:
-    # print(volume_path)
     croppa = Crop2Bone()
     croppa(volume_path)
     print(croppa._crop_dict)
     for i in range(len(croppa.scapula())):
-        print(croppa.scapula())
-        # croppa.scapula()[i].save(
-        #     f"/home/greg/projects/segment/stage2_net_training/nnunet/inference/input/{volume_path.stem}-{i}.nrrd"
-        # )
-
+        print(croppa.scapula()[i].GetSize())
+        save_volume("test.nrrd", croppa.scapula())
     print(f"Elapsed time: {time.time()-t0}")

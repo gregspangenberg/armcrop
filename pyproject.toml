@@ -12,6 +12,7 @@ numpy = "^2.1.1"
 pandas = "^2.2.3"
 networkx = "^3.3"
 onnxruntime = "^1.19.2"
+huggingface-hub = "^0.25.1"
 
 
 [tool.poetry.group.dev.dependencies]
