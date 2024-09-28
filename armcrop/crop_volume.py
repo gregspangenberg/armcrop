@@ -284,9 +284,11 @@ def post_process_volume(
 
     Z_PADDING = math.ceil(z_padding / vol.GetDepth())  #  extra space on each end
     XY_PADDING = math.ceil(xy_padding / vol.GetWidth())  # space on edges
-    MAX_Z_GAP = math.ceil(max_gap / vol.GetDepth())  # discard objects smaller than this
+    MAX_Z_GAP = math.ceil(max_gap / vol.GetDepth())  # creates new object after gap
 
+    # df: 0: slice_i, 1: box, 2: score, 3: class
     df = pd.DataFrame(data)
+    print(df)
     crop_classes = {value: [] for value in names.keys()}
     # iterate over classes
     for i in df[3].unique():
@@ -326,9 +328,12 @@ def post_process_volume(
         # sort through unions and find crop diemnsions
         ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
         for s in ds_sets:
+            print(s)
             # if set is smaller than 10 mm discard
-            if len(s) < (discard_threshold / vol.GetDepth()):
+            if len(s) < (discard_threshold / vol.GetSpacing()[-1]):
+                print("discarded")
                 continue
+            print()
             dff = df.loc[s]
             xmin, ymin, xmax, ymax = (
                 np.vstack(dff[1].values) / img_size[0] * float(vol.GetWidth())
