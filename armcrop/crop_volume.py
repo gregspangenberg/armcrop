@@ -173,7 +173,8 @@ def post_process_image(output, conf_threshold=0.5, iou_threshold=0.5):
 
 def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
     vol = sitk.ReadImage(str(volume_path))
-    vol = sitk.Clamp(vol, -1024, 3000)
+    vol = sitk.Cast(vol, sitk.sitkFloat32)
+    vol = sitk.Clamp(vol, sitk.sitkFloat32, -1024, 3000)
     vol = sitk.RescaleIntensity(vol, 0, 1)
     new_size = [img_size[0], img_size[1], vol.GetDepth()]
     reference_image = sitk.Image(new_size, vol.GetPixelIDValue())
@@ -192,7 +193,7 @@ def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
 
 def load_model(img_size):
     # load model
-    with open("stage1_yolo_training/models/yolov9c_upperlimb.onnx", "rb") as file:
+    with open("models/yolov9c_upperlimb.onnx", "rb") as file:
         # use cuda if available
         try:
             model = rt.InferenceSession(
@@ -236,23 +237,17 @@ def predict(
 
     # loop over axial images and predict
     data = []
-    for i_img in range(vol_t.shape[-1]):
-        output = model.run(
-            None,
-            {
-                "images": vol_t.data[:, :, :, i_img]
-                .unsqueeze(0)
-                .repeat(1, 3, 1, 1)
-                .numpy()
-            },
-        )
+    for i_img in range(vol_t.GetDepth()):
+        arr = sitk.GetArrayFromImage(vol_t[:, :, i_img])
+        arr = np.expand_dims(arr, axis=0)
+        arr = np.repeat(arr, 3, axis=0)
+        arr = np.expand_dims(arr, axis=0)
+        arr = arr.astype(np.float32)
+        output = model.run(None, {"images": arr})
         boxes, scores, labels = post_process_image(
             output, conf_threshold=0.4, iou_threshold=0.3
         )
         data.extend(list(zip(np.repeat(i_img, len(labels)), boxes, scores, labels)))
-
-    # unload  transformed volume to save space
-    vol_t.unload()
 
     # get the dict of crop of the bounding volume, from the predicted boxes on each axial slice
     crop_dict = post_process_volume(
@@ -332,20 +327,26 @@ def post_process_volume(
         ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
         for s in ds_sets:
             # if set is smaller than 10 mm discard
-            if len(s) < (discard_threshold / vol.spacing[-1]):
+            if len(s) < (discard_threshold / vol.GetDepth()):
                 continue
             dff = df.loc[s]
             xmin, ymin, xmax, ymax = (
-                np.vstack(dff[1].values) / img_size[0] * vol.shape[-2]
+                np.vstack(dff[1].values) / img_size[0] * float(vol.GetWidth())
             ).T
-
+            # get the bounds of the region of interest
             bounds = [
-                math.floor(xmin) - XY_PADDING,
-                math.ceil(xmax) + XY_PADDING,
-                math.floor(ymin) - XY_PADDING,
-                math.ceil(ymax) + XY_PADDING,
-                math.floor(dff[0].min()) - Z_PADDING,
-                math.floor(dff[0].max()) + Z_PADDING,
+                [
+                    math.floor(xmin.min()) - XY_PADDING,
+                    math.ceil(xmax.max()) + XY_PADDING,
+                ],
+                [
+                    math.floor(ymin.min()) - XY_PADDING,
+                    math.ceil(ymax.max()) + XY_PADDING,
+                ],
+                [
+                    math.floor(dff[0].min()) - Z_PADDING,
+                    math.floor(dff[0].max()) + Z_PADDING,
+                ],
             ]
             # clip the bounds to the volume size
             clip_intervals = [
@@ -354,6 +355,7 @@ def post_process_volume(
                 (0, vol.GetSize()[2]),
             ]
             bounds = [np.clip(b, *ci) for b, ci in zip(bounds, clip_intervals)]
+            bounds = np.array(bounds).flatten().tolist()
 
             # get center of the region of interest and the size
             _roi_center = np.array(
@@ -362,7 +364,11 @@ def post_process_volume(
             roi_center = np.floor(_roi_center)
             compensate = np.ceil(_roi_center - roi_center)
             roi_size = np.array(
-                [bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4]]
+                [
+                    math.floor((bounds[1] - bounds[0]) / 2),
+                    math.floor((bounds[3] - bounds[2]) / 2),
+                    math.floor((bounds[5] - bounds[4]) / 2),
+                ]
             )
             roi_size = roi_size + compensate
 
@@ -442,9 +448,9 @@ if __name__ == "__main__":
     croppa(volume_path)
     print(croppa._crop_dict)
     for i in range(len(croppa.scapula())):
-
-        croppa.scapula()[i].save(
-            f"/home/greg/projects/segment/stage2_net_training/nnunet/inference/input/{volume_path.stem}-{i}.nrrd"
-        )
+        print(croppa.scapula())
+        # croppa.scapula()[i].save(
+        #     f"/home/greg/projects/segment/stage2_net_training/nnunet/inference/input/{volume_path.stem}-{i}.nrrd"
+        # )
 
     print(f"Elapsed time: {time.time()-t0}")
