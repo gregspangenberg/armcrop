@@ -5,6 +5,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
 from typing import List
+from copy import deepcopy
 
 import SimpleITK as sitk
 import onnxruntime as rt
@@ -182,20 +183,21 @@ def post_process_image(output, conf_threshold=0.5, iou_threshold=0.5):
 
 def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
     vol = sitk.ReadImage(str(volume_path))
-    vol = sitk.Cast(vol, sitk.sitkFloat32)
-    vol = sitk.Clamp(vol, sitk.sitkFloat32, -1024, 3000)
-    vol = sitk.RescaleIntensity(vol, 0, 1)
-    new_size = [img_size[0], img_size[1], vol.GetDepth()]
-    reference_image = sitk.Image(new_size, vol.GetPixelIDValue())
-    reference_image.SetOrigin(vol.GetOrigin())
-    reference_image.SetDirection(vol.GetDirection())
+    vol_t = deepcopy(vol)
+    vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
+    vol_t = sitk.Clamp(vol_t, sitk.sitkFloat32, -1024, 3000)
+    vol_t = sitk.RescaleIntensity(vol_t, 0, 1)
+    new_size = [img_size[0], img_size[1], vol_t.GetDepth()]
+    reference_image = sitk.Image(new_size, vol_t.GetPixelIDValue())
+    reference_image.SetOrigin(vol_t.GetOrigin())
+    reference_image.SetDirection(vol_t.GetDirection())
     reference_image.SetSpacing(
         [
             sz * spc / nsz
-            for nsz, sz, spc in zip(new_size, vol.GetSize(), vol.GetSpacing())
+            for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())
         ]
     )
-    vol_t = sitk.Resample(vol, reference_image)
+    vol_t = sitk.Resample(vol_t, reference_image)
 
     return vol, vol_t
 
@@ -297,7 +299,6 @@ def post_process_volume(
 
     # df: 0: slice_i, 1: box, 2: score, 3: class
     df = pd.DataFrame(data)
-    print(df)
     crop_classes = {value: [] for value in names.keys()}
     # iterate over classes
     for i in df[3].unique():
@@ -337,12 +338,10 @@ def post_process_volume(
         # sort through unions and find crop diemnsions
         ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
         for s in ds_sets:
-            print(s)
             # if set is smaller than 10 mm discard
             if len(s) < (discard_threshold / vol.GetSpacing()[-1]):
-                print("discarded")
                 continue
-            print()
+
             dff = df.loc[s]
             xmin, ymin, xmax, ymax = (
                 np.vstack(dff[1].values) / img_size[0] * float(vol.GetWidth())
@@ -359,7 +358,7 @@ def post_process_volume(
                 ],
                 [
                     math.floor(dff[0].min()) - Z_PADDING,
-                    math.floor(dff[0].max()) + Z_PADDING,
+                    math.ceil(dff[0].max()) + Z_PADDING,
                 ],
             ]
             # clip the bounds to the volume size
@@ -372,24 +371,15 @@ def post_process_volume(
             bounds = np.array(bounds).flatten().tolist()
 
             # get center of the region of interest and the size
-            _roi_center = np.array(
-                [np.mean(bounds[0:2]), np.mean(bounds[2:4]), np.mean(bounds[4:6])]
-            )
-            roi_center = np.floor(_roi_center)
-            compensate = np.ceil(_roi_center - roi_center)
-            roi_size = np.array(
-                [
-                    math.floor((bounds[1] - bounds[0]) / 2),
-                    math.floor((bounds[3] - bounds[2]) / 2),
-                    math.floor((bounds[5] - bounds[4]) / 2),
-                ]
-            )
-            roi_size = roi_size + compensate
+            roi_center = [bounds[0], bounds[2], bounds[4]]
+            roi_size = [
+                math.floor((bounds[1] - bounds[0])),
+                math.floor((bounds[3] - bounds[2])),
+                math.floor((bounds[5] - bounds[4])),
+            ]
 
             # append to class crop
-            crop_classes[i].append(
-                (roi_size.astype(int).tolist(), roi_center.astype(int).tolist())
-            )
+            crop_classes[i].append([roi_size, roi_center])
 
     crop_classes = {
         names.get(old_key, old_key): value for old_key, value in crop_classes.items()
@@ -399,7 +389,7 @@ def post_process_volume(
 
 
 def save_volume(vol, path):
-    sitk.WriteImage(vol, path)
+    sitk.WriteImage(vol, path, imageIO="NrrdImageIO")
 
 
 class Crop2Bone:
@@ -407,8 +397,8 @@ class Crop2Bone:
 
     def __init__(
         self,
-        z_padding=4,
-        xy_padding=4,
+        z_padding=2,
+        xy_padding=2,
         max_gap=15,
         iou_threshold=0.1,
         discard_threshold=30,
@@ -432,7 +422,7 @@ class Crop2Bone:
     def _croppa(self, roi) -> list:
         crop_vols = []
         for r in roi:
-            vol_crop = sitk.RegionOfInterest(self.vol, r[0], r[1])
+            vol_crop = sitk.RegionOfInterest(self.vol, r[1], r[0])
             crop_vols.append(vol_crop)
         return crop_vols
 
@@ -461,6 +451,7 @@ if __name__ == "__main__":
     croppa(volume_path)
     print(croppa._crop_dict)
     for i in range(len(croppa.scapula())):
+        s = croppa.scapula()[i]
         print(croppa.scapula()[i].GetSize())
-        save_volume("test.nrrd", croppa.scapula())
+        # save_volume(s, f"test{i}.nrrd")
     print(f"Elapsed time: {time.time()-t0}")
