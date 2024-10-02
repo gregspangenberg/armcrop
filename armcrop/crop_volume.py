@@ -184,6 +184,9 @@ def post_process_image(output, conf_threshold=0.5, iou_threshold=0.5):
 def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
     vol = sitk.ReadImage(str(volume_path))
     vol_t = deepcopy(vol)
+    # x and y axes were flipped during training so we need to permute the axes
+    # in the future we will fix this in the training pipeline
+    vol_t = sitk.PermuteAxes(vol_t, [1, 0, 2])
     vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
     vol_t = sitk.Clamp(vol_t, sitk.sitkFloat32, -1024, 3000)
     vol_t = sitk.RescaleIntensity(vol_t, 0, 1)
@@ -205,15 +208,12 @@ def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
 def load_model(img_size):
     # load model
     with open(get_model(), "rb") as file:
-        # use cuda if available
-        try:
-            model = rt.InferenceSession(
-                file.read(), providers=["CUDAExecutionProvider"]
-            )
-        except:
-            model = rt.InferenceSession(file.read(), providers=["CPUExecutionProvider"])
+        # set order of providers to try
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        # providers = ["CPUExecutionProvider"]
+        model = rt.InferenceSession(file.read(), providers=providers)
 
-    # prime the model, to get the slow first inference out of the way
+    # prime the model on a random image, to get the slow first inference out of the way
     model.run(
         None,
         {"images": np.random.rand(1, 3, img_size[0], img_size[1]).astype(np.float32)},
@@ -249,15 +249,19 @@ def predict(
     # loop over axial images and predict
     data = []
     for i_img in range(vol_t.GetDepth()):
+        # prepare the image for inference
         arr = sitk.GetArrayFromImage(vol_t[:, :, i_img])
         arr = np.expand_dims(arr, axis=0)
-        arr = np.repeat(arr, 3, axis=0)
         arr = np.expand_dims(arr, axis=0)
+        arr = np.repeat(arr, 3, axis=1)
         arr = arr.astype(np.float32)
+
+        # run inference on the image
         output = model.run(None, {"images": arr})
         boxes, scores, labels = post_process_image(
             output, conf_threshold=0.4, iou_threshold=0.3
         )
+        # record the data
         data.extend(list(zip(np.repeat(i_img, len(labels)), boxes, scores, labels)))
 
     # get the dict of crop of the bounding volume, from the predicted boxes on each axial slice
@@ -293,9 +297,9 @@ def post_process_volume(
         4: "hand",
     }
 
-    Z_PADDING = math.ceil(z_padding / vol.GetDepth())  #  extra space on each end
-    XY_PADDING = math.ceil(xy_padding / vol.GetWidth())  # space on edges
-    MAX_Z_GAP = math.ceil(max_gap / vol.GetDepth())  # creates new object after gap
+    Z_PADDING = math.ceil(z_padding / vol.GetSpacing()[-1])  #  extra space on each end
+    XY_PADDING = math.ceil(xy_padding / vol.GetSpacing()[-2])  # space on edges
+    MAX_Z_GAP = math.ceil(max_gap / vol.GetSpacing()[-1])  # new object after gap
 
     # df: 0: slice_i, 1: box, 2: score, 3: class
     df = pd.DataFrame(data)
@@ -339,7 +343,7 @@ def post_process_volume(
         ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
         for s in ds_sets:
             # if set is smaller than 10 mm discard
-            if len(s) < (discard_threshold / vol.GetSpacing()[-1]):
+            if len(s) < (discard_threshold / float(vol.GetSpacing()[-1])):
                 continue
 
             dff = df.loc[s]
@@ -377,6 +381,10 @@ def post_process_volume(
                 math.floor((bounds[3] - bounds[2])),
                 math.floor((bounds[5] - bounds[4])),
             ]
+            # swap x any axes due to issue in training pipeline
+            # will fix in the future
+            roi_center = [roi_center[1], roi_center[0], roi_center[2]]
+            roi_size = [roi_size[1], roi_size[0], roi_size[2]]
 
             # append to class crop
             crop_classes[i].append([roi_size, roi_center])
@@ -422,7 +430,7 @@ class Crop2Bone:
     def _croppa(self, roi) -> list:
         crop_vols = []
         for r in roi:
-            vol_crop = sitk.RegionOfInterest(self.vol, r[1], r[0])
+            vol_crop = sitk.RegionOfInterest(self.vol, r[0], r[1])
             crop_vols.append(vol_crop)
         return crop_vols
 
@@ -450,8 +458,9 @@ if __name__ == "__main__":
     croppa = Crop2Bone()
     croppa(volume_path)
     print(croppa._crop_dict)
+    print(sitk.ReadImage(volume_path).GetSize())
     for i in range(len(croppa.scapula())):
         s = croppa.scapula()[i]
         print(croppa.scapula()[i].GetSize())
-        # save_volume(s, f"test{i}.nrrd")
+        save_volume(s, f"test{i}.nrrd")
     print(f"Elapsed time: {time.time()-t0}")

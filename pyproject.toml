@@ -8,10 +8,10 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.12"
 simpleitk = "^2.4.0"
-numpy = "^2.1.1"
+numpy = "==1.*"
 pandas = "^2.2.3"
 networkx = "^3.3"
-onnxruntime = "^1.19.2"
+onnxruntime = "1.18"
 huggingface-hub = "^0.25.1"
 
 
