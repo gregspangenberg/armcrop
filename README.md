@@ -13,11 +13,11 @@ This package contains a machine learning model that can crop a CT scan to any of
 It can do both axis aligned cropping and oriented bounding box (obb) cropping. The obb cropping allows for rigid registration of CT scans.
 
 ## Installation
-tested on python 3.12
+To use CPU execution install with:
 ```
 pip install armcrop
 ```
-
+To use CUDA execution you will need to also install torch and onnxruntime-gpu.
 
 
 ## Contributing 
