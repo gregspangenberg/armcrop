@@ -49,19 +49,19 @@ def load_model(img_size):
 def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
     vol = sitk.ReadImage(str(volume_path))
     vol_t = deepcopy(vol)
-    # x and y axes were flipped during training so we need to permute the axes
-    # in the future we will fix this in the training pipeline
-    vol_t = sitk.PermuteAxes(vol_t, [1, 0, 2])
     vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
     vol_t = sitk.Clamp(vol_t, sitk.sitkFloat32, -1024, 3000)
     vol_t = sitk.RescaleIntensity(vol_t, 0, 1)
+
     new_size = [img_size[0], img_size[1], vol_t.GetDepth()]
+
     reference_image = sitk.Image(new_size, vol_t.GetPixelIDValue())
     reference_image.SetOrigin(vol_t.GetOrigin())
     reference_image.SetDirection(vol_t.GetDirection())
     reference_image.SetSpacing(
         [sz * spc / nsz for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())]
     )
+
     vol_t = sitk.Resample(vol_t, reference_image)
 
     return vol, vol_t
@@ -393,12 +393,8 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]):
                 xyz = xyz.astype(int)
 
                 # make a boolean image of the box vertices
-                # sitk requires the image to be in zxy format because they hate
-                # you and want to waste your time, i believe this has to do with RAS
-                # vs LPS coordinate systems and sitk trying to be smart and interpret
-                # which one you want without telling you
                 zyx_bool = np.zeros(np.flip(vol.GetSize()))
-                zyx_bool[xyz[:, 2], xyz[:, 0], xyz[:, 1]] = 1
+                zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
 
                 zyx_bool = sitk.GetImageFromArray(zyx_bool)
                 zyx_bool.CopyInformation(vol)
