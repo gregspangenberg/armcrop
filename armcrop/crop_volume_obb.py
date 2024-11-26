@@ -7,7 +7,6 @@ from copy import deepcopy
 
 from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
-import huggingface_hub
 
 
 def get_model():
