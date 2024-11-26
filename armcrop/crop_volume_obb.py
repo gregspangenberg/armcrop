@@ -198,10 +198,12 @@ def nms_rotated(boxes, scores, threshold=0.45) -> np.ndarray:
     if len(boxes) == 0:
         return np.empty((0,), dtype=np.int8)
 
+    # Sort boxes by confidence scores in descending order
     sorted_idx = np.argsort(scores, axis=-1)[::-1]
     boxes = boxes[sorted_idx]
 
     ious = np.triu(batch_probiou(boxes, boxes), 1)
+    # Filter boxes based on IOU threshold to remove overlapping detections
     pick = np.nonzero(ious.max(axis=0) < threshold)[0]
 
     return sorted_idx[pick]
@@ -220,20 +222,26 @@ def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
         (np.ndarray): A tensor of shape (N, M) representing obb similarities.
     """
 
+    # Split coordinates into separate x,y components for both sets of boxes
     x1, y1 = np.split(obb1[..., :2], 2, axis=-1)
     x2, y2 = (x.squeeze(-1)[None] for x in np.split(obb2[..., :2], 2, axis=-1))
+
+    # Calculate covariance matrices for both sets of boxes
     a1, b1, c1 = _get_covariance_matrix(obb1)
     a2, b2, c2 = (x.squeeze(-1)[None] for x in _get_covariance_matrix(obb2))
 
+    # Calculate first term of Bhattacharyya distance using quadratic forms
     t1 = (
         ((a1 + a2) * np.power((y1 - y2), 2) + (b1 + b2) * np.power((x1 - x2), 2))
         / ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2) + eps)
     ) * 0.25
 
+    # Calculate second term (cross term) of Bhattacharyya distance
     t2 = (
         ((c1 + c2) * (x2 - x1) * (y1 - y2)) / ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2) + eps)
     ) * 0.5
 
+    # Calculate third term (determinant term) of Bhattacharyya distance
     t3 = (
         np.log(
             ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2))
@@ -248,14 +256,14 @@ def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
         )
         * 0.5
     )
-
+    # Convert Bhattacharyya distance to Hellinger distance and then to IOU
     bd = np.clip(t1 + t2 + t3, eps, 100.0)
     hd = np.sqrt(1 - np.exp(-bd) + eps)
 
     return 1 - hd
 
 
-def _get_covariance_matrix(boxes) -> np.ndarray:
+def _get_covariance_matrix(boxes) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generating covariance matrix from obbs.
 
@@ -322,14 +330,14 @@ def xywhr2xyxyxyxy(x, round=False) -> np.ndarray:
 
 
 def predict(volume_path) -> dict:
-    # load model and volume
+    # Initialize model with specified image dimensions and load volume
     img_size = (640, 640)
     model, vol, vol_t = load(volume_path, img_size)
 
-    # loop over axial images and predict
+    # Process each axial slice for prediction
     data = []
     for z in range(vol_t.GetDepth()):
-        # prepare the image for inference
+        # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
         arr = sitk.GetArrayFromImage(vol_t[:, :, z])
         arr = np.expand_dims(arr, axis=0)
         arr = np.expand_dims(arr, axis=0)
@@ -338,13 +346,17 @@ def predict(volume_path) -> dict:
 
         # run inference on the image
         output = model.run(None, {"images": arr})
+        # perform non-max supression on the output
         preds = non_max_suppression_rotated(output[0])[0]
 
         preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
         data.extend(preds)
 
+    # organize predictions by class
     cls_dict = class_dict_construct(np.array(data))
+    # group bounding boxes in the z direction based on IoU
     iou_dict = iou_volume(cls_dict, vol)
+    # align and crop the volume with the oriented bounding boxes for each detected object
     aligned_vol_dict = obb_volume(cls_dict, iou_dict, vol, vol_t)
 
     return aligned_vol_dict
@@ -398,18 +410,22 @@ def iou_volume(class_dict, vol, z_interval=50, min_z_size=50) -> dict:
     iou_dict = deepcopy(class_dict)
     for c in class_dict:
         groups = []
+        # Process bounding boxes for each class if they exist
         if class_dict[c] is not None:
             xywhr, _, _, z = np.split(class_dict[c], [5, 6, 7], axis=1)
             z = z.flatten()
+            # Calculate overlapping boxes within z-interval range
             for i in range(len(z)):
                 range_min = np.clip(z[i] - z_interval, z[0], z[-1])
                 range_max = np.clip(z[i] + z_interval, z[0], z[-1] + 1)
                 nearby_i = (z >= range_min) & (z <= range_max)
 
+                # Calculate IoU between current box and nearby boxes
                 ious = batch_probiou(xywhr[i : i + 1, :], xywhr[nearby_i]).flatten()
                 idx_iou = np.where(nearby_i)[0][np.where(ious > 0.1)[0]]
                 groups.append(list(idx_iou))
 
+            # Group overlapping boxes using UnionFind data structure
             ds = UnionFind()
             for gp in groups:
                 ds.union(*gp)
@@ -434,7 +450,9 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) ->
     Returns:
         aligned_img_dict: dictionary containing the aligned images for each class
     """
+
     aligned_img_dict = deepcopy(class_dict)
+    # Process each class and align volumes according to oriented bounding boxes
     for c in class_dict:
         aligned_img_dict[c] = []
         if class_dict[c] is not None:
@@ -442,7 +460,7 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) ->
             for group_i, group in enumerate(iou_dict[c]):
                 # get the vertices of the group
                 xywhr_group = xywhr[group]
-                # scale the vertices to the original volume
+                # Scale coordinates back to original volume dimensions
                 xywhr_group[:, :-1] *= vol.GetWidth() / vol_t.GetWidth()
                 # convert to xy format
                 xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group, round=True)
@@ -452,7 +470,7 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) ->
                 xyz = xyz.reshape(-1, 3)
                 xyz = xyz.astype(int)
 
-                # make a boolean image of the box vertices
+                # Create boolean image marking box vertices
                 zyx_bool = np.zeros(np.flip(vol.GetSize()))
                 zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
 
@@ -461,7 +479,7 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) ->
 
                 zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
 
-                # compute the oriented bounding box
+                # Calculate oriented bounding box using SimpleITK filter
                 obb_filter = sitk.LabelShapeStatisticsImageFilter()
                 obb_filter.ComputeOrientedBoundingBoxOn()
                 obb_filter.Execute(zyx_bool)
