@@ -2,23 +2,39 @@ import onnxruntime as rt
 import SimpleITK as sitk
 import numpy as np
 import pathlib
+from typing import Tuple, List
 from math import ceil
 from copy import deepcopy
 
 from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
+import huggingface_hub
 
 
-def get_model():
+def get_model() -> str:
+    """
+    Download the ML model from hugginface for inference
+
+    Returns:
+        model_path: Path to the ML model
+    """
     model_path = huggingface_hub.hf_hub_download(
         repo_id="gregspangenberg/armcrop",
         filename="upperarm_yolo11_obb.onnx",
     )
-    # model_path = "/home/greg/projects/segment/stage1_yolo_training/models/upperarm_yolo11_obb.onnx"
     return model_path
 
 
-def load_model(img_size):
+def load_model(img_size) -> rt.InferenceSession:
+    """
+    Load the ML model for inference
+
+    Args:
+        img_size: Image size required for the ML model
+
+    Returns:
+        model: The ML model for inference
+    """
     # load model
     with open(get_model(), "rb") as file:
         try:
@@ -34,6 +50,7 @@ def load_model(img_size):
                 )
             ]
         except:
+            print("Using CPUExecutionProvider")
             providers = ["CPUExecutionProvider"]
         model = rt.InferenceSession(file.read(), providers=providers)
 
@@ -46,7 +63,18 @@ def load_model(img_size):
     return model
 
 
-def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
+def load_volume(volume_path: pathlib.Path, img_size=(640, 640)) -> Tuple[sitk.Image, sitk.Image]:
+    """
+    Load a volume and preprcoess it for inference
+
+    Args:
+        volume_path: Path to the input volume for inference
+        img_size: Image size required for the ML model. Defaults to (640, 640).
+
+    Returns:
+        vol: The original volume
+        vol_t: The preprocessed volume
+    """
     vol = sitk.ReadImage(str(volume_path))
     vol_t = deepcopy(vol)
     vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
@@ -67,7 +95,19 @@ def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
     return vol, vol_t
 
 
-def load(volume_path, img_size):
+def load(volume_path, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]:
+    """
+    Load the ML model and the volume for inference
+
+    Args:
+        volume_path: path to the volume for inference
+        img_size: pixel size required for the ML model
+
+    Returns:
+        model: The ML model for inference
+        vol: The original volume
+        vol_t: The preprocessed volume
+    """
     with ThreadPoolExecutor() as executor:
         # Apply the tasks asynchronously
         volume_result = executor.submit(load_volume, volume_path, img_size)
@@ -79,7 +119,7 @@ def load(volume_path, img_size):
     return model, vol, vol_t
 
 
-def non_max_suppression_rotated(prediction, conf_thres=0.4, iou_thres=0.2):
+def non_max_suppression_rotated(prediction, conf_thres=0.4, iou_thres=0.2) -> List[np.ndarray]:
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
 
@@ -142,7 +182,7 @@ def non_max_suppression_rotated(prediction, conf_thres=0.4, iou_thres=0.2):
     return output
 
 
-def nms_rotated(boxes, scores, threshold=0.45):
+def nms_rotated(boxes, scores, threshold=0.45) -> np.ndarray:
     """
     NMS for oriented bounding boxes using probiou and fast-nms.
 
@@ -167,7 +207,7 @@ def nms_rotated(boxes, scores, threshold=0.45):
     return sorted_idx[pick]
 
 
-def batch_probiou(obb1, obb2, eps=1e-7):
+def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
     """
     Calculate the prob IoU between oriented bounding boxes, https://arxiv.org/pdf/2106.06072v1.pdf.
 
@@ -215,7 +255,7 @@ def batch_probiou(obb1, obb2, eps=1e-7):
     return 1 - hd
 
 
-def _get_covariance_matrix(boxes):
+def _get_covariance_matrix(boxes) -> np.ndarray:
     """
     Generating covariance matrix from obbs.
 
@@ -244,7 +284,7 @@ def round2pminf(x):
     return np.copysign(np.ceil(np.abs(x)), x)
 
 
-def xywhr2xyxyxyxy(x, round=False):
+def xywhr2xyxyxyxy(x, round=False) -> np.ndarray:
     """
     Convert batched Oriented Bounding Boxes (OBB) from [xywh, rotation] to [xy1, xy2, xy3, xy4]. Rotation values should
     be in radians from 0 to pi/2.
@@ -281,9 +321,7 @@ def xywhr2xyxyxyxy(x, round=False):
     return stack([pt1, pt2, pt3, pt4], -2)
 
 
-def predict(
-    volume_path,
-):
+def predict(volume_path) -> dict:
     # load model and volume
     img_size = (640, 640)
     model, vol, vol_t = load(volume_path, img_size)
@@ -312,7 +350,16 @@ def predict(
     return aligned_vol_dict
 
 
-def class_dict_construct(data):
+def class_dict_construct(data) -> dict:
+    """
+    Creates the dictionary with the data for each class
+
+    Args:
+        data: The data from the ML model
+
+    Returns:
+        class_data: The dictionary with the ml data broken down by class
+    """
     # break up by class
     sorted_cls_idx = np.argsort(data[:, -2])
     sorted_data = data[sorted_cls_idx]
@@ -331,7 +378,7 @@ def class_dict_construct(data):
     return class_data
 
 
-def iou_volume(class_dict, vol, z_interval=50, min_z_size=50):
+def iou_volume(class_dict, vol, z_interval=50, min_z_size=50) -> dict:
     """#
     This function groups the bounding boxes in the z direction based on their IoU. It groups boxes that have an IoU greater than 0.1 in the z direction.
 
@@ -373,7 +420,20 @@ def iou_volume(class_dict, vol, z_interval=50, min_z_size=50):
     return iou_dict
 
 
-def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]):
+def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) -> dict:
+    """
+    This function takes the bounding boxes and groups them in the z direction based on their IoU. It then computes the oriented bounding box of the group and resamples the volume to align the bounding box with the volume
+
+    Args:
+        class_dict: dictionary containing the bounding boxes for each class
+        iou_dict: dictionary containing the groups of ious for each class
+        vol: CT scan volume
+        vol_t: CT scan volume with the required preprocessing for the  ML model
+        obb_spacing: Pixel spacing for the output volume that matches the oriented bounding box. Defaults to [0.5, 0.5, 0.5].
+
+    Returns:
+        aligned_img_dict: dictionary containing the aligned images for each class
+    """
     aligned_img_dict = deepcopy(class_dict)
     for c in class_dict:
         aligned_img_dict[c] = []
