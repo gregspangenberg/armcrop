@@ -174,9 +174,7 @@ def post_process_image(output, conf_threshold=0.5, iou_threshold=0.5):
     # Apply non-maxima suppression to suppress weak, overlapping bounding boxes
     indices = multiclass_nms(boxes, scores, class_ids, iou_threshold)
 
-    boxes, scores, class_ids = unique_encompassing_boxes(
-        boxes, scores, class_ids, indices
-    )
+    boxes, scores, class_ids = unique_encompassing_boxes(boxes, scores, class_ids, indices)
 
     return boxes, scores, class_ids
 
@@ -195,10 +193,7 @@ def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
     reference_image.SetOrigin(vol_t.GetOrigin())
     reference_image.SetDirection(vol_t.GetDirection())
     reference_image.SetSpacing(
-        [
-            sz * spc / nsz
-            for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())
-        ]
+        [sz * spc / nsz for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())]
     )
     vol_t = sitk.Resample(vol_t, reference_image)
 
@@ -210,7 +205,17 @@ def load_model(img_size):
     with open(get_model(), "rb") as file:
         # set order of providers to try
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        # providers = ["CPUExecutionProvider"]
+        import torch
+
+        providers = [
+            (
+                "CUDAExecutionProvider",
+                {
+                    "device_id": torch.cuda.current_device(),
+                    "user_compute_stream": str(torch.cuda.current_stream().cuda_stream),
+                },
+            )
+        ]
         model = rt.InferenceSession(file.read(), providers=providers)
 
     # prime the model on a random image, to get the slow first inference out of the way
@@ -258,9 +263,7 @@ def predict(
 
         # run inference on the image
         output = model.run(None, {"images": arr})
-        boxes, scores, labels = post_process_image(
-            output, conf_threshold=0.4, iou_threshold=0.3
-        )
+        boxes, scores, labels = post_process_image(output, conf_threshold=0.4, iou_threshold=0.3)
         # record the data
         data.extend(list(zip(np.repeat(i_img, len(labels)), boxes, scores, labels)))
 
@@ -321,9 +324,7 @@ def post_process_volume(
             i_img = int(row[0])
             # find the number of slices adjacent to current slice
             near_i_img = np.arange(i_img - MAX_Z_GAP, i_img + MAX_Z_GAP + 1)
-            near_i_img = near_i_img[
-                (near_i_img >= cdf_min_i_img) & (near_i_img <= cdf_max_i_img)
-            ]
+            near_i_img = near_i_img[(near_i_img >= cdf_min_i_img) & (near_i_img <= cdf_max_i_img)]
 
             # get the boxes of the adjacent slices
             c_boxes = np.vstack(cdf[1][cdf[0].isin(near_i_img)].values)
@@ -389,9 +390,7 @@ def post_process_volume(
             # append to class crop
             crop_classes[i].append([roi_size, roi_center])
 
-    crop_classes = {
-        names.get(old_key, old_key): value for old_key, value in crop_classes.items()
-    }
+    crop_classes = {names.get(old_key, old_key): value for old_key, value in crop_classes.items()}
 
     return crop_classes
 
@@ -426,6 +425,7 @@ class Crop2Bone:
             self.iou_threshold,
             self.discard_threshold,
         )
+        return self
 
     def _croppa(self, roi) -> list:
         crop_vols = []
@@ -453,7 +453,7 @@ class Crop2Bone:
 if __name__ == "__main__":
     t0 = time.time()
 
-    volume_path = pathlib.Path("/mnt/slowdata/cadaveric-full-arm/S221830/S221830.nrrd")
+    volume_path = pathlib.Path("/mnt/slowdata/cadaveric-full-arm/S202048/S202048.nrrd")
 
     croppa = Crop2Bone()
     croppa(volume_path)
@@ -462,5 +462,5 @@ if __name__ == "__main__":
     for i in range(len(croppa.scapula())):
         s = croppa.scapula()[i]
         print(croppa.scapula()[i].GetSize())
-        save_volume(s, f"test{i}.nrrd")
+        save_volume(s, f"S202048-{i}.nrrd")
     print(f"Elapsed time: {time.time()-t0}")
