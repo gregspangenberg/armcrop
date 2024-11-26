@@ -12,7 +12,7 @@ This package contains a machine learning model that can crop a CT scan to any of
 
 It can do both axis aligned cropping and oriented bounding box (obb) cropping. The obb cropping allows for rigid registration of CT scans.
 
-This model was trained on arm only scans and proximal half chest scans. A limitation of this model is that when the spine is present in the CT scan then the model will struggle to differentiate between it and the scapula.
+This model was trained on arm only scans and proximal half chest scans. A limitation of this model is that when using a full chest CT where the spine is present the model will struggle to differentiate between it and the scapula.
 
 ## Installation
 To use CPU execution install with:
