@@ -509,7 +509,7 @@ class OBBCrop2Bone:
 
         aligned_imgs = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
-        if self._class_dict[c_idx] is None:
+        if self._class_dict[c_idx] is not None:
             xywhr, _, _, z = np.split(self._class_dict[c_idx], [5, 6, 7], axis=1)
             for group in self._iou_dict[c_idx]:
                 # get the vertices of the group
@@ -552,9 +552,9 @@ class OBBCrop2Bone:
                 z_padding = self.z_padding / obb_spacing[2]
                 aligned_img_size = [
                     (
-                        int(aligned_img_size[i] + z_padding)
+                        int(aligned_img_size[i] + 2 * z_padding)
                         if aligned_img_size[i] == max(aligned_img_size)
-                        else int(aligned_img_size[i] + xy_padding)
+                        else int(aligned_img_size[i] + 2 * xy_padding)
                     )
                     for i in range(3)
                 ]
@@ -636,9 +636,9 @@ class OBBCrop2Bone:
 
 
 if __name__ == "__main__":
-    p = predict("/mnt/slowdata/cadaveric-full-arm/S202032/S202032.nrrd")
-
-    for c in p:
-        for i, img in enumerate(p[c]):
-            print(type(c), type(i))
-            # sitk.WriteImage(img, f"aligned_{c}_{i}.nrrd")
+    ct_path = "/mnt/slowdata/cadaveric-full-arm/S202032/S202032.nrrd"
+    obb_crop = OBBCrop2Bone(z_padding=2, xy_padding=2)
+    obb_crop = obb_crop(ct_path)
+    for i, img in enumerate(obb_crop.humerus()):
+        print(img.GetSize())
+        # sitk.WriteImage(img, f"humerus-{i}.nrrd")
