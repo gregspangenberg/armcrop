@@ -455,11 +455,11 @@ class OBBCrop2Bone:
     Aligns oriented bounding box volumes to bones in the input volume
 
     Args:
-        z_padding: Padding along the z-axis in mm. Defaults to 2.
-        xy_padding: Padding along the x and y axes in mm. Defaults to 2.
+        z_padding: Padding along the z-axis of the obb in mm. Defaults to 0.
+        xy_padding: Padding along the x and y axes of the obb in mm. Defaults to 0.
         iou_threshold: IoU threshold for grouping bounding boxes in the z direction. Defaults to 0.1.
-        z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction. Defaults to 15.
-        z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object. Defaults to 30.
+        z_iou_interval: The interval in mm along the CT z-axis for grouping bounding boxes. Defaults to 50.
+        z_length_min: The minimum length along the CT z-axis in mm for a group of overlapping bounding boxes to be considered a detected object. Defaults to 30.
 
     Methods:
         __call__(volume_path):
@@ -484,10 +484,10 @@ class OBBCrop2Bone:
 
     def __init__(
         self,
-        z_padding=2,
-        xy_padding=2,
+        z_padding=0,
+        xy_padding=0,
         iou_threshold=0.1,
-        z_iou_interval=15,
+        z_iou_interval=50,
         z_length_min=30,
     ):
         self.z_padding = z_padding
@@ -505,7 +505,7 @@ class OBBCrop2Bone:
         )
         return self
 
-    def _align(self, c_idx: int, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+    def _align(self, c_idx: int, obb_spacing: List[float]) -> List[sitk.Image]:
 
         aligned_imgs = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
@@ -527,10 +527,8 @@ class OBBCrop2Bone:
                 # Create boolean image marking box vertices
                 zyx_bool = np.zeros(np.flip(self.vol.GetSize()))
                 zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
-
                 zyx_bool = sitk.GetImageFromArray(zyx_bool)
                 zyx_bool.CopyInformation(self.vol)
-
                 zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
 
                 # Calculate oriented bounding box using SimpleITK filter
@@ -544,8 +542,20 @@ class OBBCrop2Bone:
 
                 # boot up the resampler
                 resampler = sitk.ResampleImageFilter()
+                # calculate the size of the aligned image
                 aligned_img_size = [
                     int(ceil(obb_filter.GetOrientedBoundingBoxSize(1)[i] / obb_spacing[i]))
+                    for i in range(3)
+                ]
+                # along the long axis, add the z padding, and xy padding for the other 2
+                xy_padding = self.xy_padding / obb_spacing[0]
+                z_padding = self.z_padding / obb_spacing[2]
+                aligned_img_size = [
+                    (
+                        int(aligned_img_size[i] + z_padding)
+                        if aligned_img_size[i] == max(aligned_img_size)
+                        else int(aligned_img_size[i] + xy_padding)
+                    )
                     for i in range(3)
                 ]
                 resampler.SetOutputDirection(aligned_img_dir)
