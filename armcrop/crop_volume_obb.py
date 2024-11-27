@@ -2,9 +2,10 @@ import onnxruntime as rt
 import SimpleITK as sitk
 import numpy as np
 import pathlib
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 from math import ceil
 from copy import deepcopy
+import abc
 
 from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
@@ -144,7 +145,7 @@ def non_max_suppression_rotated(prediction, conf_thres=0.4, iou_thres=0.2) -> Li
     ), f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
-    bs = prediction.shape[0]  # batch size (BCN, i.e. 1,84,6300)
+    bs = prediction.shape[0]  # batch size (BCN,. Defaults to 1,84,6300)
     nc = 5  # number of classes
     nm = prediction.shape[1] - nc - 4  # number of masks
     mi = 4 + nc  # mask start index
@@ -329,40 +330,7 @@ def xywhr2xyxyxyxy(x, round=False) -> np.ndarray:
     return stack([pt1, pt2, pt3, pt4], -2)
 
 
-def predict(volume_path) -> dict:
-    # Initialize model with specified image dimensions and load volume
-    img_size = (640, 640)
-    model, vol, vol_t = load(volume_path, img_size)
-
-    # Process each axial slice for prediction
-    data = []
-    for z in range(vol_t.GetDepth()):
-        # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
-        arr = sitk.GetArrayFromImage(vol_t[:, :, z])
-        arr = np.expand_dims(arr, axis=0)
-        arr = np.expand_dims(arr, axis=0)
-        arr = np.repeat(arr, 3, axis=1)
-        arr = arr.astype(np.float32)
-
-        # run inference on the image
-        output = model.run(None, {"images": arr})
-        # perform non-max supression on the output
-        preds = non_max_suppression_rotated(output[0])[0]
-
-        preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
-        data.extend(preds)
-
-    # organize predictions by class
-    cls_dict = class_dict_construct(np.array(data))
-    # group bounding boxes in the z direction based on IoU
-    iou_dict = iou_volume(cls_dict, vol)
-    # align and crop the volume with the oriented bounding boxes for each detected object
-    aligned_vol_dict = obb_volume(cls_dict, iou_dict, vol, vol_t)
-
-    return aligned_vol_dict
-
-
-def class_dict_construct(data) -> dict:
+def class_dict_construct(data) -> Dict:
     """
     Creates the dictionary with the data for each class
 
@@ -390,7 +358,7 @@ def class_dict_construct(data) -> dict:
     return class_data
 
 
-def iou_volume(class_dict, vol, z_interval=50, min_z_size=50) -> dict:
+def iou_volume(class_dict, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50) -> Dict:
     """#
     This function groups the bounding boxes in the z direction based on their IoU. It groups boxes that have an IoU greater than 0.1 in the z direction.
 
@@ -404,8 +372,8 @@ def iou_volume(class_dict, vol, z_interval=50, min_z_size=50) -> dict:
         _description_
     """
 
-    z_interval = int(z_interval / vol.GetSpacing()[-1])
-    min_z_size = int(min_z_size / vol.GetSpacing()[-1])
+    z_iou_interval = int(z_iou_interval / vol.GetSpacing()[-1])
+    z_length_min = int(z_length_min / vol.GetSpacing()[-1])
 
     iou_dict = deepcopy(class_dict)
     for c in class_dict:
@@ -416,13 +384,13 @@ def iou_volume(class_dict, vol, z_interval=50, min_z_size=50) -> dict:
             z = z.flatten()
             # Calculate overlapping boxes within z-interval range
             for i in range(len(z)):
-                range_min = np.clip(z[i] - z_interval, z[0], z[-1])
-                range_max = np.clip(z[i] + z_interval, z[0], z[-1] + 1)
+                range_min = np.clip(z[i] - z_iou_interval, z[0], z[-1])
+                range_max = np.clip(z[i] + z_iou_interval, z[0], z[-1] + 1)
                 nearby_i = (z >= range_min) & (z <= range_max)
 
                 # Calculate IoU between current box and nearby boxes
                 ious = batch_probiou(xywhr[i : i + 1, :], xywhr[nearby_i]).flatten()
-                idx_iou = np.where(nearby_i)[0][np.where(ious > 0.1)[0]]
+                idx_iou = np.where(nearby_i)[0][np.where(ious > iou_threshold)[0]]
                 groups.append(list(idx_iou))
 
             # Group overlapping boxes using UnionFind data structure
@@ -430,38 +398,104 @@ def iou_volume(class_dict, vol, z_interval=50, min_z_size=50) -> dict:
             for gp in groups:
                 ds.union(*gp)
             ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
-            ds_sets = [s for s in ds_sets if len(s) >= min_z_size]
+            ds_sets = [s for s in ds_sets if len(s) >= z_length_min]
 
             iou_dict[c] = ds_sets
     return iou_dict
 
 
-def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) -> dict:
+def predict(
+    volume_path: str | pathlib.Path,
+    iou_threshold,
+    z_iou_interval,
+    z_length_min,
+) -> Tuple[sitk.Image, Dict, Dict]:
     """
-    This function takes the bounding boxes and groups them in the z direction based on their IoU. It then computes the oriented bounding box of the group and resamples the volume to align the bounding box with the volume
+    Predict the oriented bounding boxes for each class in the input volume
 
     Args:
-        class_dict: dictionary containing the bounding boxes for each class
-        iou_dict: dictionary containing the groups of ious for each class
-        vol: CT scan volume
-        vol_t: CT scan volume with the required preprocessing for the  ML model
-        obb_spacing: Pixel spacing for the output volume that matches the oriented bounding box. Defaults to [0.5, 0.5, 0.5].
+        volume_path: Path to the input volume for inference
 
     Returns:
-        aligned_img_dict: dictionary containing the aligned images for each class
+        vol: The original volume
+        aligned_vol_dict: Dictionary with keys for each class containing a list of sitk.Image 's for each detected object in the class
+    """
+    # Initialize model with specified image dimensions and load volume
+    img_size = (640, 640)
+    model, vol, vol_t = load(volume_path, img_size)
+
+    # Process each axial slice for prediction
+    data = []
+    for z in range(vol_t.GetDepth()):
+        # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
+        arr = sitk.GetArrayFromImage(vol_t[:, :, z])
+        arr = np.expand_dims(arr, axis=0)
+        arr = np.expand_dims(arr, axis=0)
+        arr = np.repeat(arr, 3, axis=1)
+        arr = arr.astype(np.float32)
+
+        # run inference on the image
+        output = model.run(None, {"images": arr})
+        # perform non-max supression on the output
+        preds = non_max_suppression_rotated(output[0])[0]
+        # add the z coordinate to the predictions
+        preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
+        data.extend(preds)
+
+    # organize predictions by class
+    cls_dict = class_dict_construct(np.array(data))
+    # group bounding boxes in the z direction based on IoU
+    iou_dict = iou_volume(cls_dict, vol, iou_threshold, z_iou_interval, z_length_min)
+
+    return vol, cls_dict, iou_dict
+
+
+class OBBCrop2Bone:
+    """
+    Aligns oriented bounding box volumes to bones in the input volume
+
+    Args:
+        z_padding: Padding along the z-axis in mm. Defaults to 2.
+        xy_padding: Padding along the x and y axes in mm. Defaults to 2.
+        iou_threshold: IoU threshold for grouping bounding boxes in the z direction. Defaults to 0.1.
+        z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction. Defaults to 15.
+        z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object. Defaults to 30.
     """
 
-    aligned_img_dict = deepcopy(class_dict)
-    # Process each class and align volumes according to oriented bounding boxes
-    for c in class_dict:
-        aligned_img_dict[c] = []
-        if class_dict[c] is not None:
-            xywhr, _, _, z = np.split(class_dict[c], [5, 6, 7], axis=1)
-            for group_i, group in enumerate(iou_dict[c]):
+    def __init__(
+        self,
+        z_padding=2,
+        xy_padding=2,
+        iou_threshold=0.1,
+        z_iou_interval=15,
+        z_length_min=30,
+    ):
+        self.z_padding = z_padding
+        self.xy_padding = xy_padding
+        self.iou_threshold = iou_threshold
+        self.z_iou_interval = z_iou_interval
+        self.z_length_min = z_length_min
+
+    def __call__(self, volume_path):
+        self.vol, self._class_dict, self._iou_dict = predict(
+            volume_path,
+            self.iou_threshold,
+            self.z_iou_interval,
+            self.z_length_min,
+        )
+        return self
+
+    def _align(self, c_idx: int, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+
+        aligned_imgs = []
+        # Process all instances of the class and align volumes according to oriented bounding boxes
+        if self._class_dict[c_idx] is None:
+            xywhr, _, _, z = np.split(self._class_dict[c_idx], [5, 6, 7], axis=1)
+            for group in self._iou_dict[c_idx]:
                 # get the vertices of the group
                 xywhr_group = xywhr[group]
                 # Scale coordinates back to original volume dimensions
-                xywhr_group[:, :-1] *= vol.GetWidth() / vol_t.GetWidth()
+                xywhr_group[:, :-1] *= self.vol.GetWidth() / 640
                 # convert to xy format
                 xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group, round=True)
                 # add in the z coordinate
@@ -471,11 +505,11 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) ->
                 xyz = xyz.astype(int)
 
                 # Create boolean image marking box vertices
-                zyx_bool = np.zeros(np.flip(vol.GetSize()))
+                zyx_bool = np.zeros(np.flip(self.vol.GetSize()))
                 zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
 
                 zyx_bool = sitk.GetImageFromArray(zyx_bool)
-                zyx_bool.CopyInformation(vol)
+                zyx_bool.CopyInformation(self.vol)
 
                 zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
 
@@ -502,10 +536,73 @@ def obb_volume(class_dict, iou_dict, vol, vol_t, obb_spacing=[0.5, 0.5, 0.5]) ->
                 resampler.SetInterpolator(sitk.sitkLinear)
                 resampler.SetDefaultPixelValue(-1024)
                 # get the aligned image, and its array
-                aligned_img = resampler.Execute(vol)
+                aligned_img = resampler.Execute(self.vol)
 
-                aligned_img_dict[c].append(aligned_img)
-    return aligned_img_dict
+                aligned_imgs.append(aligned_img)
+
+        return aligned_imgs
+
+    def clavicle(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+        """
+        Aligns an oriented bounding box volume to each clavicle in the scan
+
+        Args:
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
+
+        Returns:
+            aligned_imgs: A list of the aligned images
+        """
+        return self._align(0, obb_spacing)
+
+    def scapula(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+        """
+        Aligns an oriented bounding box volume to each scapula in the scan
+
+        Args:
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
+
+        Returns:
+            aligned_imgs: A list of the aligned images
+        """
+
+        return self._align(1, obb_spacing)
+
+    def humerus(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+        """
+        Aligns an oriented bounding box volume to each humerus in the scan
+
+        Args:
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
+
+        Returns:
+            aligned_imgs: A list of the aligned images
+        """
+        return self._align(2, obb_spacing)
+
+    def radius_ulna(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+        """
+        Aligns an oriented bounding box volume to each radius ulna in the scan
+
+        Args:
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
+
+        Returns:
+            aligned_imgs: A list of the aligned images
+        """
+
+        return self._align(3, obb_spacing)
+
+    def hand(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+        """
+        Aligns an oriented bounding box volume to each hand in the scan
+
+        Args:
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
+
+        Returns:
+            aligned_imgs: A list of the aligned images
+        """
+        return self._align(4, obb_spacing)
 
 
 if __name__ == "__main__":
@@ -513,4 +610,5 @@ if __name__ == "__main__":
 
     for c in p:
         for i, img in enumerate(p[c]):
-            sitk.WriteImage(img, f"aligned_{c}_{i}.nrrd")
+            print(type(c), type(i))
+            # sitk.WriteImage(img, f"aligned_{c}_{i}.nrrd")
