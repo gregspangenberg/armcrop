@@ -400,7 +400,35 @@ def save_volume(vol, path):
 
 
 class Crop2Bone:
-    """Crops the volume to the bounding box of the bone of interest"""
+    """
+    Crops a bounding box volume to the bone of interest.
+
+    Attributes:
+        z_padding (int): Padding in the z-dimension.
+        xy_padding (int): Padding in the x and y dimensions.
+        max_gap (int): Maximum gap allowed.
+        iou_threshold (float): Intersection over Union threshold.
+        discard_threshold (int): Threshold for discarding small regions.
+
+    Methods:
+        __call__(volume_path):
+            Predicts and crops the volume based on the provided parameters.
+
+        clavicle() -> List[sitk.Image]:
+            Returns the cropped volume for the clavicle.
+
+        scapula() -> List[sitk.Image]:
+            Returns the cropped volume for the scapula.
+
+        humerus() -> List[sitk.Image]:
+            Returns the cropped volume for the humerus.
+
+        radius_ulna() -> List[sitk.Image]:
+            Returns the cropped volume for the radius and ulna.
+
+        hand() -> List[sitk.Image]:
+            Returns the cropped volume for the hand.
+    """
 
     def __init__(
         self,
@@ -434,20 +462,55 @@ class Crop2Bone:
             crop_vols.append(vol_crop)
         return crop_vols
 
-    def clavicle(self) -> List[sitk.Image]:
-        return self._croppa(self._crop_dict["clavicle"])
 
-    def scapula(self) -> List[sitk.Image]:
-        return self._croppa(self._crop_dict["scapula"])
+def clavicle(self) -> List[sitk.Image]:
+    """
+    Extracts and crops the clavicle region from the CT volume.
 
-    def humerus(self) -> List[sitk.Image]:
-        return self._croppa(self._crop_dict["humerus"])
+    Returns:
+        List[sitk.Image]: List of cropped volumes containing detected clavicles
+    """
+    return self._croppa(self._crop_dict["clavicle"])
 
-    def radius_ulna(self) -> List[sitk.Image]:
-        return self._croppa(self._crop_dict["radius_ulna"])
 
-    def hand(self) -> List[sitk.Image]:
-        return self._croppa(self._crop_dict["hand"])
+def scapula(self) -> List[sitk.Image]:
+    """
+    Extracts and crops the scapula region from the CT volume.
+
+    Returns:
+        List[sitk.Image]: List of cropped volumes containing detected scapulae
+    """
+    return self._croppa(self._crop_dict["scapula"])
+
+
+def humerus(self) -> List[sitk.Image]:
+    """
+    Extracts and crops the humerus region from the CT volume.
+
+    Returns:
+        List[sitk.Image]: List of cropped volumes containing detected humeri
+    """
+    return self._croppa(self._crop_dict["humerus"])
+
+
+def radius_ulna(self) -> List[sitk.Image]:
+    """
+    Extracts and crops the radius and ulna regions from the CT volume.
+
+    Returns:
+        List[sitk.Image]: List of cropped volumes containing detected radius/ulna pairs
+    """
+    return self._croppa(self._crop_dict["radius_ulna"])
+
+
+def hand(self) -> List[sitk.Image]:
+    """
+    Extracts and crops the hand region from the CT volume.
+
+    Returns:
+        List[sitk.Image]: List of cropped volumes containing detected hands
+    """
+    return self._croppa(self._crop_dict["hand"])
 
 
 if __name__ == "__main__":

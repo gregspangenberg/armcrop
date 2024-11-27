@@ -460,6 +460,26 @@ class OBBCrop2Bone:
         iou_threshold: IoU threshold for grouping bounding boxes in the z direction. Defaults to 0.1.
         z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction. Defaults to 15.
         z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object. Defaults to 30.
+
+    Methods:
+        __call__(volume_path):
+            Predicts and crops the volume based on the provided parameters.
+
+        clavicle() -> List[sitk.Image]:
+            Returns the cropped volume for the clavicle.
+
+        scapula() -> List[sitk.Image]:
+            Returns the cropped volume for the scapula.
+
+        humerus() -> List[sitk.Image]:
+            Returns the cropped volume for the humerus.
+
+        radius_ulna() -> List[sitk.Image]:
+            Returns the cropped volume for the radius and ulna.
+
+        hand() -> List[sitk.Image]:
+            Returns the cropped volume for the hand.
+
     """
 
     def __init__(
