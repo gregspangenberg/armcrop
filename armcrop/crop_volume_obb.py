@@ -635,6 +635,22 @@ class OBBCrop2Bone:
         return self._align(4, obb_spacing)
 
 
+class UnalignOBBSegmentation:
+    def __init__(self, OBBCrop2Bone):
+        self.OBBCropper = OBBCrop2Bone
+
+    def __call__(self, segmentation: sitk.Image):
+        original_csys_seg = sitk.Resample(
+            segmentation,
+            self.OBBCropper.vol,
+            sitk.Transform(),
+            sitk.sitkNearestNeighbor,
+            0,
+            # segmentation.GetPixelID(),
+        )
+        return original_csys_seg
+
+
 if __name__ == "__main__":
     ct_path = "/mnt/slowdata/cadaveric-full-arm/S202032/S202032.nrrd"
     obb_crop = OBBCrop2Bone(z_padding=2, xy_padding=2)
