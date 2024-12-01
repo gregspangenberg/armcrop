@@ -210,6 +210,28 @@ def nms_rotated(boxes, scores, threshold=0.45) -> np.ndarray:
     return sorted_idx[pick]
 
 
+def nms_rotated_conf_only(boxes, scores, threshold=0.45) -> np.ndarray:
+    """
+    NMS for oriented bounding boxes using probiou and fast-nms.
+
+    Args:
+        boxes (np.ndarray): Rotated bounding boxes, shape (N, 5), format xywhr.
+        scores (np.ndarray): Confidence scores, shape (N,).
+        threshold (float, optional): IoU threshold. Defaults to 0.45.
+
+    Returns:
+        (np.ndarray): Indices of boxes to keep after NMS.
+    """
+
+    if len(boxes) == 0:
+        return np.empty((0,), dtype=np.int8)
+
+    # Sort boxes by confidence scores in descending order
+    sorted_idx = np.argmax(scores, axis=-1)
+
+    return sorted_idx
+
+
 def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
     """
     Calculate the prob IoU between oriented bounding boxes, https://arxiv.org/pdf/2106.06072v1.pdf.
