@@ -463,15 +463,9 @@ class OBBCrop2Bone:
     Aligns oriented bounding box volumes to bones in the input volume
 
     Args:
-        z_padding: Padding along the z-axis of the obb in mm. Defaults to 0.
-        xy_padding: Padding along the x and y axes of the obb in mm. Defaults to 0.
-        iou_threshold: IoU threshold for grouping bounding boxes in the z direction. Defaults to 0.1.
-        z_iou_interval: The interval in mm along the CT z-axis for grouping bounding boxes. Defaults to 50.
-        z_length_min: The minimum length along the CT z-axis in mm for a group of overlapping bounding boxes to be considered a detected object. Defaults to 30.
+        volume_path: Path to the input volume for inference
 
     Methods:
-        __call__(volume_path):
-            Predicts and crops the volume based on the provided parameters.
 
         clavicle() -> List[sitk.Image]:
             Returns the cropped volume for the clavicle.
@@ -492,22 +486,10 @@ class OBBCrop2Bone:
 
     def __init__(
         self,
-        z_padding=0,
-        xy_padding=0,
-        iou_threshold=0.1,
-        z_iou_interval=50,
-        z_length_min=30,
+        volume_path: str | pathlib.Path,
     ):
-        self.z_padding = z_padding
-        self.xy_padding = xy_padding
-        self.iou_threshold = iou_threshold
-        self.z_iou_interval = z_iou_interval
-        self.z_length_min = z_length_min
 
-    def __call__(self, volume_path):
         self.vol, self._class_dict = predict(volume_path)
-
-        return self
 
     def _obb(
         self, c_idx: int, iou_threshold: float, z_iou_interval: int, z_length_min: int
@@ -564,6 +546,8 @@ class OBBCrop2Bone:
         iou_threshold: float,
         z_iou_interval: int,
         z_length_min: int,
+        xy_padding: int,
+        z_padding: int,
     ) -> List[sitk.Image] | None:
 
         self._obb_filters = []
@@ -571,7 +555,7 @@ class OBBCrop2Bone:
         # Process all instances of the class and align volumes according to oriented bounding boxes
         obb_filters_list = self._obb(c_idx, iou_threshold, z_iou_interval, z_length_min)
         # if the obb filter, returned None then also return None
-        if obb_filters_list:
+        if obb_filters_list == None:
             return None
         # if the is an obb filter, align the volume
         else:
@@ -589,8 +573,8 @@ class OBBCrop2Bone:
                     for i in range(3)
                 ]
                 # along the long axis, add the z padding, and xy padding for the other 2
-                xy_padding = self.xy_padding / obb_spacing[0]
-                z_padding = self.z_padding / obb_spacing[2]
+                xy_padding = xy_padding / obb_spacing[0]
+                z_padding = z_padding / obb_spacing[2]
                 aligned_img_size = [
                     (
                         int(aligned_img_size[i] + 2 * z_padding)
@@ -614,76 +598,137 @@ class OBBCrop2Bone:
         return aligned_imgs
 
     def clavicle(
-        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.1, z_iou_interval=60, z_length_min=20
+        self,
+        obb_spacing=[0.5, 0.5, 0.5],
+        iou_threshold=0.1,
+        z_iou_interval=60,
+        z_length_min=20,
+        xy_padding=0,
+        z_padding=0,
     ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each clavicle in the scan
 
         Args:
-            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm.
+            io_threshold: The IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
 
         Returns:
             aligned_imgs: A list of the aligned images
         """
-        return self._align(0, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
+        return self._align(
+            0, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
 
     def scapula(
-        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.3, z_iou_interval=30, z_length_min=50
+        self,
+        obb_spacing=[0.5, 0.5, 0.5],
+        iou_threshold=0.3,
+        z_iou_interval=30,
+        z_length_min=50,
+        xy_padding=0,
+        z_padding=0,
     ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each scapula in the scan
 
         Args:
-            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
-
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm.
+            io_threshold: The IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
         Returns:
             aligned_imgs: A list of the aligned images
         """
 
-        return self._align(1, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
+        return self._align(
+            1, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
 
     def humerus(
-        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.35, z_iou_interval=20, z_length_min=100
+        self,
+        obb_spacing=[0.5, 0.5, 0.5],
+        iou_threshold=0.35,
+        z_iou_interval=20,
+        z_length_min=10,
+        xy_padding=0,
+        z_padding=0,
     ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each humerus in the scan
 
         Args:
-            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
-
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm.
+            io_threshold: The IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
         Returns:
             aligned_imgs: A list of the aligned images
         """
-        return self._align(2, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
+        return self._align(
+            2, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
 
     def radius_ulna(
-        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.25, z_iou_interval=30, z_length_min=100
+        self,
+        obb_spacing=[0.5, 0.5, 0.5],
+        iou_threshold=0.25,
+        z_iou_interval=30,
+        z_length_min=100,
+        xy_padding=0,
+        z_padding=0,
     ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each radius ulna in the scan
 
         Args:
-            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
-
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm.
+            io_threshold: The IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
         Returns:
             aligned_imgs: A list of the aligned images
         """
 
-        return self._align(3, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
+        return self._align(
+            3, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
 
     def hand(
-        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.2, z_iou_interval=40, z_length_min=50
+        self,
+        obb_spacing=[0.5, 0.5, 0.5],
+        iou_threshold=0.2,
+        z_iou_interval=40,
+        z_length_min=50,
+        xy_padding=0,
+        z_padding=0,
     ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each hand in the scan
 
         Args:
-            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm. Defaults to [0.5,0.5,0.5]
-
+            obb_spacing: The spacing of the oriented bounding box along all 3 axes in mm.
+            io_threshold: The IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
         Returns:
             aligned_imgs: A list of the aligned images
         """
-        return self._align(4, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
+        return self._align(
+            4, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
 
 
 class UnalignOBBSegmentation:
