@@ -493,11 +493,11 @@ class OBBCrop2Bone:
 
     def _obb(
         self, c_idx: int, iou_threshold: float, z_iou_interval: int, z_length_min: int
-    ) -> List[sitk.LabelShapeStatisticsImageFilter] | None:
+    ) -> List[sitk.LabelShapeStatisticsImageFilter] | List:
 
         # Process all instances of the class and align volumes according to oriented bounding boxes
         if self._class_dict[c_idx] is None:
-            return None
+            return []
         else:
             obb_filters_list = []
             # group bounding boxes in the z direction based on IoU
@@ -548,52 +548,49 @@ class OBBCrop2Bone:
         z_length_min: int,
         xy_padding: int,
         z_padding: int,
-    ) -> List[sitk.Image] | None:
+    ) -> List[sitk.Image] | List:
 
         self._obb_filters = []
         aligned_imgs = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
         obb_filters_list = self._obb(c_idx, iou_threshold, z_iou_interval, z_length_min)
         # if the obb filter, returned None then also return None
-        if obb_filters_list == None:
-            return None
-        # if the is an obb filter, align the volume
-        else:
-            for obb_filter in obb_filters_list:
 
-                # get the direction of the obb and transpose it
-                _d = obb_filter.GetOrientedBoundingBoxDirection(1)
-                aligned_img_dir = np.array(_d).reshape(3, 3).T.flatten().tolist()
+        for obb_filter in obb_filters_list:
 
-                # boot up the resampler
-                resampler = sitk.ResampleImageFilter()
-                # calculate the size of the aligned image
-                aligned_img_size = [
-                    int(ceil(obb_filter.GetOrientedBoundingBoxSize(1)[i] / obb_spacing[i]))
-                    for i in range(3)
-                ]
-                # along the long axis, add the z padding, and xy padding for the other 2
-                xy_padding = xy_padding / obb_spacing[0]
-                z_padding = z_padding / obb_spacing[2]
-                aligned_img_size = [
-                    (
-                        int(aligned_img_size[i] + 2 * z_padding)
-                        if aligned_img_size[i] == max(aligned_img_size)
-                        else int(aligned_img_size[i] + 2 * xy_padding)
-                    )
-                    for i in range(3)
-                ]
-                resampler.SetOutputDirection(aligned_img_dir)
-                resampler.SetOutputOrigin(obb_filter.GetOrientedBoundingBoxOrigin(1))
-                resampler.SetOutputSpacing(obb_spacing)
-                resampler.SetSize(aligned_img_size)
-                # resampler.SetOutputPixelType(sitk.sitkUInt8)
-                resampler.SetInterpolator(sitk.sitkLinear)
-                resampler.SetDefaultPixelValue(-1024)
-                # get the aligned image, and its array
-                aligned_img = resampler.Execute(self.vol)
+            # get the direction of the obb and transpose it
+            _d = obb_filter.GetOrientedBoundingBoxDirection(1)
+            aligned_img_dir = np.array(_d).reshape(3, 3).T.flatten().tolist()
 
-                aligned_imgs.append(aligned_img)
+            # boot up the resampler
+            resampler = sitk.ResampleImageFilter()
+            # calculate the size of the aligned image
+            aligned_img_size = [
+                int(ceil(obb_filter.GetOrientedBoundingBoxSize(1)[i] / obb_spacing[i]))
+                for i in range(3)
+            ]
+            # along the long axis, add the z padding, and xy padding for the other 2
+            xy_padding = xy_padding / obb_spacing[0]
+            z_padding = z_padding / obb_spacing[2]
+            aligned_img_size = [
+                (
+                    int(aligned_img_size[i] + 2 * z_padding)
+                    if aligned_img_size[i] == max(aligned_img_size)
+                    else int(aligned_img_size[i] + 2 * xy_padding)
+                )
+                for i in range(3)
+            ]
+            resampler.SetOutputDirection(aligned_img_dir)
+            resampler.SetOutputOrigin(obb_filter.GetOrientedBoundingBoxOrigin(1))
+            resampler.SetOutputSpacing(obb_spacing)
+            resampler.SetSize(aligned_img_size)
+            # resampler.SetOutputPixelType(sitk.sitkUInt8)
+            resampler.SetInterpolator(sitk.sitkLinear)
+            resampler.SetDefaultPixelValue(-1024)
+            # get the aligned image, and its array
+            aligned_img = resampler.Execute(self.vol)
+
+            aligned_imgs.append(aligned_img)
 
         return aligned_imgs
 
@@ -605,7 +602,7 @@ class OBBCrop2Bone:
         z_length_min=20,
         xy_padding=0,
         z_padding=0,
-    ) -> List[sitk.Image] | None:
+    ) -> List[sitk.Image] | List:
         """
         Aligns an oriented bounding box volume to each clavicle in the scan
 
@@ -632,7 +629,7 @@ class OBBCrop2Bone:
         z_length_min=50,
         xy_padding=0,
         z_padding=0,
-    ) -> List[sitk.Image] | None:
+    ) -> List[sitk.Image] | List:
         """
         Aligns an oriented bounding box volume to each scapula in the scan
 
@@ -659,7 +656,7 @@ class OBBCrop2Bone:
         z_length_min=10,
         xy_padding=0,
         z_padding=0,
-    ) -> List[sitk.Image] | None:
+    ) -> List[sitk.Image] | List:
         """
         Aligns an oriented bounding box volume to each humerus in the scan
 
@@ -685,7 +682,7 @@ class OBBCrop2Bone:
         z_length_min=100,
         xy_padding=0,
         z_padding=0,
-    ) -> List[sitk.Image] | None:
+    ) -> List[sitk.Image] | List:
         """
         Aligns an oriented bounding box volume to each radius ulna in the scan
 
@@ -712,7 +709,7 @@ class OBBCrop2Bone:
         z_length_min=50,
         xy_padding=0,
         z_padding=0,
-    ) -> List[sitk.Image] | None:
+    ) -> List[sitk.Image] | List:
         """
         Aligns an oriented bounding box volume to each hand in the scan
 
@@ -749,8 +746,7 @@ class UnalignOBBSegmentation:
 
 if __name__ == "__main__":
     ct_path = "/mnt/slowdata/cadaveric-full-arm/S202032/S202032.nrrd"
-    obb_crop = OBBCrop2Bone(z_padding=2, xy_padding=2)
-    obb_crop = obb_crop(ct_path)
+    obb_crop = OBBCrop2Bone(ct_path)
     for i, img in enumerate(obb_crop.humerus()):
         print(img.GetSize())
         # sitk.WriteImage(img, f"humerus-{i}.nrrd")
