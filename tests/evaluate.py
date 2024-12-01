@@ -119,11 +119,13 @@ def main():
         z_padding=0, xy_padding=0, iou_threshold=0.1, z_iou_interval=50, z_length_min=20
     )
     # Process each segmentation
+    subjects = []
     for seg_path in sorted(seg_dir.glob("*.seg.nrrd")):
         subject_id = seg_path.stem.split(".")[0].split("_")[0]
 
         if subject_id not in val_subjects:
             continue
+        subjects.append(seg_path.stem.split(".")[0])
         # get matching CT
         ct_path = get_ct_path(subject_id, ct_dirs)
 
@@ -192,7 +194,10 @@ def main():
             )
             print("\n\n")
 
-    pd.DataFrame(val_results).to_csv("data/val_results.csv")
+    df = pd.DataFrame(val_results)
+    df["subjects"] = subjects
+    df.to_csv("data/val_results.csv")
+
     print(val_results)
 
 

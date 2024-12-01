@@ -377,7 +377,7 @@ def class_dict_construct(data) -> Dict:
     return class_data
 
 
-def iou_volume(class_dict, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50) -> Dict:
+def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50) -> List:
     """#
     This function groups the bounding boxes in the z direction based on their IoU. It groups boxes that have an IoU greater than 0.1 in the z direction.
 
@@ -390,45 +390,36 @@ def iou_volume(class_dict, vol, iou_threshold=0.1, z_iou_interval=50, z_length_m
     Returns:
         _description_
     """
-
+    # Calculate the z-interval and minimum z size in pixels
     z_iou_interval = int(z_iou_interval / vol.GetSpacing()[-1])
     z_length_min = int(z_length_min / vol.GetSpacing()[-1])
 
-    iou_dict = deepcopy(class_dict)
-    for c in class_dict:
-        groups = []
-        # Process bounding boxes for each class if they exist
-        if class_dict[c] is not None:
-            xywhr, _, _, z = np.split(class_dict[c], [5, 6, 7], axis=1)
-            z = z.flatten()
-            # Calculate overlapping boxes within z-interval range
-            for i in range(len(z)):
-                range_min = np.clip(z[i] - z_iou_interval, z[0], z[-1])
-                range_max = np.clip(z[i] + z_iou_interval, z[0], z[-1] + 1)
-                nearby_i = (z >= range_min) & (z <= range_max)
+    # Process bounding boxes for each class if they exist
+    xywhr, _, _, z = np.split(class_dict[c], [5, 6, 7], axis=1)
+    z = z.flatten()
+    # Calculate overlapping boxes within z-interval range
+    groups = []
+    for i in range(len(z)):
+        range_min = np.clip(z[i] - z_iou_interval, z[0], z[-1])
+        range_max = np.clip(z[i] + z_iou_interval, z[0], z[-1] + 1)
+        nearby_i = (z >= range_min) & (z <= range_max)
 
-                # Calculate IoU between current box and nearby boxes
-                ious = batch_probiou(xywhr[i : i + 1, :], xywhr[nearby_i]).flatten()
-                idx_iou = np.where(nearby_i)[0][np.where(ious > iou_threshold)[0]]
-                groups.append(list(idx_iou))
+        # Calculate IoU between current box and nearby boxes
+        ious = batch_probiou(xywhr[i : i + 1, :], xywhr[nearby_i]).flatten()
+        idx_iou = np.where(nearby_i)[0][np.where(ious > iou_threshold)[0]]
+        groups.append(list(idx_iou))
 
-            # Group overlapping boxes using UnionFind data structure
-            ds = UnionFind()
-            for gp in groups:
-                ds.union(*gp)
-            ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
-            ds_sets = [s for s in ds_sets if len(s) >= z_length_min]
+    # Group overlapping boxes using UnionFind data structure
+    ds = UnionFind()
+    for gp in groups:
+        ds.union(*gp)
+    ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
+    ds_sets = [s for s in ds_sets if len(s) >= z_length_min]
 
-            iou_dict[c] = ds_sets
-    return iou_dict
+    return ds_sets
 
 
-def predict(
-    volume_path: str | pathlib.Path,
-    iou_threshold,
-    z_iou_interval,
-    z_length_min,
-) -> Tuple[sitk.Image, Dict, Dict]:
+def predict(volume_path: str | pathlib.Path) -> Tuple[sitk.Image, Dict]:
     """
     Predict the oriented bounding boxes for each class in the input volume
 
@@ -463,10 +454,8 @@ def predict(
 
     # organize predictions by class
     cls_dict = class_dict_construct(np.array(data))
-    # group bounding boxes in the z direction based on IoU
-    iou_dict = iou_volume(cls_dict, vol, iou_threshold, z_iou_interval, z_length_min)
 
-    return vol, cls_dict, iou_dict
+    return vol, cls_dict
 
 
 class OBBCrop2Bone:
@@ -516,22 +505,26 @@ class OBBCrop2Bone:
         self.z_length_min = z_length_min
 
     def __call__(self, volume_path):
-        self.vol, self._class_dict, self._iou_dict = predict(
-            volume_path,
-            self.iou_threshold,
-            self.z_iou_interval,
-            self.z_length_min,
-        )
+        self.vol, self._class_dict = predict(volume_path)
+
         return self
 
-    def _align(self, c_idx: int, obb_spacing: List[float]) -> List[sitk.Image]:
+    def _obb(
+        self, c_idx: int, iou_threshold: float, z_iou_interval: int, z_length_min: int
+    ) -> List[sitk.LabelShapeStatisticsImageFilter] | None:
 
-        self._obb_filters = []
-        aligned_imgs = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
-        if self._class_dict[c_idx] is not None:
+        if self._class_dict[c_idx] is None:
+            return None
+        else:
+            obb_filters_list = []
+            # group bounding boxes in the z direction based on IoU
+            groups = iou_volume(
+                self._class_dict, c_idx, self.vol, iou_threshold, z_iou_interval, z_length_min
+            )
+
             xywhr, _, _, z = np.split(self._class_dict[c_idx], [5, 6, 7], axis=1)
-            for group in self._iou_dict[c_idx]:
+            for group in groups:
                 # get the vertices of the group
                 xywhr_group = xywhr[group]
                 # Scale coordinates back to original volume dimensions
@@ -560,7 +553,29 @@ class OBBCrop2Bone:
                 obb_filter.Execute(zyx_bool)
 
                 # record obb filter for testing purposes
-                self._obb_filters.append(obb_filter)
+                obb_filters_list.append(obb_filter)
+
+        return obb_filters_list
+
+    def _align(
+        self,
+        c_idx: int,
+        obb_spacing: List,
+        iou_threshold: float,
+        z_iou_interval: int,
+        z_length_min: int,
+    ) -> List[sitk.Image] | None:
+
+        self._obb_filters = []
+        aligned_imgs = []
+        # Process all instances of the class and align volumes according to oriented bounding boxes
+        obb_filters_list = self._obb(c_idx, iou_threshold, z_iou_interval, z_length_min)
+        # if the obb filter, returned None then also return None
+        if obb_filters_list:
+            return None
+        # if the is an obb filter, align the volume
+        else:
+            for obb_filter in obb_filters_list:
 
                 # get the direction of the obb and transpose it
                 _d = obb_filter.GetOrientedBoundingBoxDirection(1)
@@ -598,7 +613,9 @@ class OBBCrop2Bone:
 
         return aligned_imgs
 
-    def clavicle(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+    def clavicle(
+        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.1, z_iou_interval=60, z_length_min=20
+    ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each clavicle in the scan
 
@@ -608,9 +625,11 @@ class OBBCrop2Bone:
         Returns:
             aligned_imgs: A list of the aligned images
         """
-        return self._align(0, obb_spacing)
+        return self._align(0, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
 
-    def scapula(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+    def scapula(
+        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.3, z_iou_interval=30, z_length_min=50
+    ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each scapula in the scan
 
@@ -621,9 +640,11 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
 
-        return self._align(1, obb_spacing)
+        return self._align(1, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
 
-    def humerus(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+    def humerus(
+        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.35, z_iou_interval=20, z_length_min=100
+    ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each humerus in the scan
 
@@ -633,9 +654,11 @@ class OBBCrop2Bone:
         Returns:
             aligned_imgs: A list of the aligned images
         """
-        return self._align(2, obb_spacing)
+        return self._align(2, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
 
-    def radius_ulna(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+    def radius_ulna(
+        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.25, z_iou_interval=30, z_length_min=100
+    ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each radius ulna in the scan
 
@@ -646,9 +669,11 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
 
-        return self._align(3, obb_spacing)
+        return self._align(3, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
 
-    def hand(self, obb_spacing=[0.5, 0.5, 0.5]) -> List[sitk.Image]:
+    def hand(
+        self, obb_spacing=[0.5, 0.5, 0.5], iou_threshold=0.2, z_iou_interval=40, z_length_min=50
+    ) -> List[sitk.Image] | None:
         """
         Aligns an oriented bounding box volume to each hand in the scan
 
@@ -658,7 +683,7 @@ class OBBCrop2Bone:
         Returns:
             aligned_imgs: A list of the aligned images
         """
-        return self._align(4, obb_spacing)
+        return self._align(4, obb_spacing, iou_threshold, z_iou_interval, z_length_min)
 
 
 class UnalignOBBSegmentation:
