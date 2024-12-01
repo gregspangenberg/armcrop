@@ -120,7 +120,7 @@ def load(volume_path, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.I
     return model, vol, vol_t
 
 
-def non_max_suppression_rotated(prediction, conf_thres=0.4, iou_thres=0.2) -> List[np.ndarray]:
+def non_max_suppression_rotated(prediction, conf_thres=0.5, iou_thres=0.4) -> List[np.ndarray]:
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
 
@@ -487,9 +487,13 @@ class OBBCrop2Bone:
     def __init__(
         self,
         volume_path: str | pathlib.Path,
+        debug: bool = False,
     ):
-
-        self.vol, self._class_dict = predict(volume_path)
+        if not debug:
+            self.vol, self._class_dict = predict(volume_path)
+        else:
+            self.vol = sitk.ReadImage(str(volume_path))
+            self._class_dict = {}
 
     def _obb(
         self, c_idx: int, iou_threshold: float, z_iou_interval: int, z_length_min: int
@@ -597,8 +601,8 @@ class OBBCrop2Bone:
     def clavicle(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        iou_threshold=0.1,
-        z_iou_interval=60,
+        z_iou_threshold=0.23,
+        z_iou_interval=21,
         z_length_min=20,
         xy_padding=0,
         z_padding=0,
@@ -618,15 +622,15 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
         return self._align(
-            0, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            0, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
         )
 
     def scapula(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        iou_threshold=0.3,
+        z_iou_threshold=0.19,
         z_iou_interval=30,
-        z_length_min=50,
+        z_length_min=70,
         xy_padding=0,
         z_padding=0,
     ) -> List[sitk.Image] | List:
@@ -645,15 +649,15 @@ class OBBCrop2Bone:
         """
 
         return self._align(
-            1, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            1, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
         )
 
     def humerus(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        iou_threshold=0.35,
+        z_iou_threshold=0.35,
         z_iou_interval=20,
-        z_length_min=10,
+        z_length_min=70,
         xy_padding=0,
         z_padding=0,
     ) -> List[sitk.Image] | List:
@@ -671,13 +675,13 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
         return self._align(
-            2, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            2, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
         )
 
     def radius_ulna(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        iou_threshold=0.25,
+        z_iou_threshold=0.25,
         z_iou_interval=30,
         z_length_min=100,
         xy_padding=0,
@@ -698,13 +702,13 @@ class OBBCrop2Bone:
         """
 
         return self._align(
-            3, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            3, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
         )
 
     def hand(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        iou_threshold=0.2,
+        z_iou_threshold=0.2,
         z_iou_interval=40,
         z_length_min=50,
         xy_padding=0,
@@ -724,7 +728,7 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
         return self._align(
-            4, obb_spacing, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            4, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
         )
 
 
@@ -745,8 +749,9 @@ class UnalignOBBSegmentation:
 
 
 if __name__ == "__main__":
-    ct_path = "/mnt/slowdata/cadaveric-full-arm/S202032/S202032.nrrd"
+    ct_path = "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd"
     obb_crop = OBBCrop2Bone(ct_path)
+    print(obb_crop._class_dict)
     for i, img in enumerate(obb_crop.humerus()):
         print(img.GetSize())
         # sitk.WriteImage(img, f"humerus-{i}.nrrd")
