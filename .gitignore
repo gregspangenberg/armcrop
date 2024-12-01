@@ -3,3 +3,4 @@
 *.onnx
 *.nrrd
 /dist
+/tests/data

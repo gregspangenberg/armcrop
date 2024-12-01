@@ -293,10 +293,26 @@ def round2pminf(x):
     return np.copysign(np.ceil(np.abs(x)), x)
 
 
-def xywhr2xyxyxyxy(x, round=False) -> np.ndarray:
+def regularize_rboxes(rboxes):
     """
-    Convert batched Oriented Bounding Boxes (OBB) from [xywh, rotation] to [xy1, xy2, xy3, xy4]. Rotation values should
-    be in radians from 0 to pi/2.
+    Regularize rotated boxes in range [0, pi/2].
+
+    Args:
+        rboxes (numpy.ndarray): Input boxes of shape(N, 5) in xywhr format.
+
+    Returns:
+        (numpy.ndarray): The regularized boxes.
+    """
+    x, y, w, h, t = np.split(rboxes, 5, axis=-1)
+    w_ = np.where(w > h, w, h)
+    h_ = np.where(w > h, h, w)
+    t = np.where(w > h, t, t + np.pi / 2) % np.pi
+    return np.concatenate([x, y, w_, h_, t], axis=-1)  # regularized boxes
+
+
+def xywhr2xyxyxyxy(x, round=True):
+    """
+    Convert batched Oriented Bounding Boxes (OBB) from [xywh, rotation] to [xy1, xy2, xy3, xy4].
 
     Args:
         x (numpy.ndarray): Boxes in [cx, cy, w, h, rotation] format of shape (n, 5) or (b, n, 5).
@@ -304,16 +320,19 @@ def xywhr2xyxyxyxy(x, round=False) -> np.ndarray:
     Returns:
         (numpy.ndarray): Converted corner points of shape (n, 4, 2) or (b, n, 4, 2).
     """
-    cos, sin, cat, stack = (np.cos, np.sin, np.concatenate, np.stack)
+    # Regularize the input boxes first
+    rboxes = regularize_rboxes(x)
 
-    ctr = x[..., :2]
-    w, h, angle = (x[..., i : i + 1] for i in range(2, 5))
-    cos_value, sin_value = cos(angle), sin(angle)
-    vec1 = [w / 2 * cos_value, w / 2 * sin_value]
-    vec2 = [-h / 2 * sin_value, h / 2 * cos_value]
-    vec1 = cat(vec1, -1)
-    vec2 = cat(vec2, -1)
+    ctr = rboxes[..., :2]
+    w, h, angle = (rboxes[..., i : i + 1] for i in range(2, 5))
 
+    cos_value = np.cos(angle)
+    sin_value = np.sin(angle)
+
+    vec1 = np.concatenate([w / 2 * cos_value, w / 2 * sin_value], axis=-1)
+    vec2 = np.concatenate([-h / 2 * sin_value, h / 2 * cos_value], axis=-1)
+
+    # round to the nearest pixel
     if round:
         rem = np.remainder(ctr, np.floor(ctr))
         ctr = np.floor(ctr)
@@ -327,7 +346,7 @@ def xywhr2xyxyxyxy(x, round=False) -> np.ndarray:
         pt3 = ctr - vec1 - vec2
         pt4 = ctr - vec1 + vec2
 
-    return stack([pt1, pt2, pt3, pt4], -2)
+    return np.stack([pt1, pt2, pt3, pt4], axis=-2)
 
 
 def class_dict_construct(data) -> Dict:
@@ -507,6 +526,7 @@ class OBBCrop2Bone:
 
     def _align(self, c_idx: int, obb_spacing: List[float]) -> List[sitk.Image]:
 
+        self._obb_filters = []
         aligned_imgs = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
         if self._class_dict[c_idx] is not None:
@@ -515,9 +535,12 @@ class OBBCrop2Bone:
                 # get the vertices of the group
                 xywhr_group = xywhr[group]
                 # Scale coordinates back to original volume dimensions
-                xywhr_group[:, :-1] *= self.vol.GetWidth() / 640
+                xywhr_group[:, :-1] /= 640.0
+                xywhr_group[:, :-1] *= float(self.vol.GetHeight())
                 # convert to xy format
-                xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group, round=True)
+                xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group)
+                # clip to volume dimensions to avoid out of bounds errors
+                xyxyxyxy_group = np.clip(xyxyxyxy_group, 0, int(self.vol.GetHeight() - 1))
                 # add in the z coordinate
                 z_group = np.repeat(np.expand_dims(z[group], axis=1), 4, axis=1)
                 xyz = np.concatenate([xyxyxyxy_group, z_group], axis=-1)
@@ -535,6 +558,9 @@ class OBBCrop2Bone:
                 obb_filter = sitk.LabelShapeStatisticsImageFilter()
                 obb_filter.ComputeOrientedBoundingBoxOn()
                 obb_filter.Execute(zyx_bool)
+
+                # record obb filter for testing purposes
+                self._obb_filters.append(obb_filter)
 
                 # get the direction of the obb and transpose it
                 _d = obb_filter.GetOrientedBoundingBoxDirection(1)

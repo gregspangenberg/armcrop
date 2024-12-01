@@ -22,9 +22,5 @@ pip install armcrop
 To use CUDA execution you will need to also install torch and onnxruntime-gpu.
 
 
-## Contributing 
-Clone the repo, open the cloned folder containing the poetry.lock file, then install the development dependencies using poetry. 
-```
-poetry install --with dev
-``` 
+
 
