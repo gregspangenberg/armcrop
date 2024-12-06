@@ -509,9 +509,10 @@ class OBBCrop2Bone:
     def __init__(
         self,
         volume_path: str | pathlib.Path,
-        debug_class: bool = False,
+        debug_class=False,
     ):
         self.debug_points = False
+        self.interpolator = sitk.sitkBSpline3
         if not debug_class:
             self.vol, self._class_dict = predict(volume_path)
         else:
@@ -615,7 +616,7 @@ class OBBCrop2Bone:
             resampler.SetOutputSpacing(obb_spacing)
             resampler.SetSize(aligned_img_size)
             # resampler.SetOutputPixelType(sitk.sitkUInt8)
-            resampler.SetInterpolator(sitk.sitkLinear)
+            resampler.SetInterpolator(self.interpolator)
             resampler.SetDefaultPixelValue(-1024)
             # get the aligned image, and its array
             aligned_img = resampler.Execute(self.vol)
@@ -789,7 +790,7 @@ if __name__ == "__main__":
     ct_path = "/mnt/slowdata/cadaveric-full-arm/171052R/171052R.nrrd"
 
     # test obb crop
-    obb_crop = OBBCrop2Bone(ct_path)
+    obb_crop = OBBCrop2Bone(ct_path, sitk.sitkBSpline3)
     # print(obb_crop._class_dict)
     for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
         print(img.GetSize())
