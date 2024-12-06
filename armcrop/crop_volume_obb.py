@@ -771,7 +771,7 @@ class UnalignOBBSegmentation:
 
 
 if __name__ == "__main__":
-    ct_path = "/mnt/slowdata/exactech_data/no_complications/AY-316-R.nii.gz"
+    ct_path = "/mnt/slowdata/cadaveric-full-arm/170919L/170919L.nrrd"
     obb_crop = OBBCrop2Bone(ct_path)
     # print(obb_crop._class_dict)
     for i, img in enumerate(
