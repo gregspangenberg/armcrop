@@ -755,13 +755,13 @@ class OBBCrop2Bone:
 
 
 class UnalignOBBSegmentation:
-    def __init__(self, OBBCrop2Bone):
-        self.OBBCropper = OBBCrop2Bone
+    def __init__(self, volume_path: str | pathlib.Path):
+        self.volume_path = volume_path
 
     def __call__(self, segmentation: sitk.Image):
         original_csys_seg = sitk.Resample(
             segmentation,
-            self.OBBCropper.vol,
+            sitk.ReadImage(str(self.volume_path)),
             sitk.Transform(),
             sitk.sitkNearestNeighbor,
             0,
