@@ -509,9 +509,10 @@ class OBBCrop2Bone:
     def __init__(
         self,
         volume_path: str | pathlib.Path,
-        debug: bool = False,
+        debug_class: bool = False,
     ):
-        if not debug:
+        self.debug_points = False
+        if not debug_class:
             self.vol, self._class_dict = predict(volume_path)
         else:
             self.vol = sitk.ReadImage(str(volume_path))
@@ -554,6 +555,9 @@ class OBBCrop2Bone:
                 zyx_bool = sitk.GetImageFromArray(zyx_bool)
                 zyx_bool.CopyInformation(self.vol)
                 zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
+
+                if self.debug_points:
+                    sitk.WriteImage(zyx_bool, f"zyx_bool_{c_idx}.seg.nrrd")
 
                 # Calculate oriented bounding box using SimpleITK filter
                 obb_filter = sitk.LabelShapeStatisticsImageFilter()
@@ -755,10 +759,21 @@ class OBBCrop2Bone:
 
 
 class UnalignOBBSegmentation:
+    """
+    Unaligns a segmentation made in and oriented bounding box to the original volume
+
+    Args:
+        volume_path: Path to the original input volume used for obb inference
+
+    __call__(segmentation_path: str | pathlib.Path) -> sitk.Image:
+    """
+
     def __init__(self, volume_path: str | pathlib.Path):
         self.volume_path = volume_path
 
-    def __call__(self, segmentation: sitk.Image):
+    def __call__(self, segmentation_path: str | pathlib.Path) -> sitk.Image:
+        segmentation = sitk.ReadImage(str(segmentation_path))
+        segmentation = sitk.Cast(segmentation, sitk.sitkUInt8)
         original_csys_seg = sitk.Resample(
             segmentation,
             sitk.ReadImage(str(self.volume_path)),
@@ -771,11 +786,15 @@ class UnalignOBBSegmentation:
 
 
 if __name__ == "__main__":
-    ct_path = "/mnt/slowdata/cadaveric-full-arm/170919L/170919L.nrrd"
+    ct_path = "/mnt/slowdata/cadaveric-full-arm/171052R/171052R.nrrd"
+
+    # test obb crop
     obb_crop = OBBCrop2Bone(ct_path)
     # print(obb_crop._class_dict)
-    for i, img in enumerate(
-        obb_crop.scapula(z_iou_threshold=0.1, z_iou_interval=50, z_length_min=30)
-    ):
+    for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
         print(img.GetSize())
         sitk.WriteImage(img, f"scapula-{i}.nrrd")
+
+    # # test unaligner
+    # unaligner = UnalignOBBSegmentation(ct_path)
+    # sitk.WriteImage(unaligner("scapula.seg.nrrd"), "scapula_unalgined.seg.nrrd")
