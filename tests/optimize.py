@@ -162,7 +162,8 @@ def optimization_loop(croppers, lbl, iou_threshold, z_iou_interval):
         # calculate the goal
         vol_overlap = np.max(vol_overlap.flatten().numpy(), axis=0)
         # goal.append(vol_overlap / vol_true)
-        goal.append(float(np.max(iou.numpy())))
+        # goal.append(float(np.max(iou.numpy())))
+        goal.append(float(np.sqrt(np.sum(center_pred_error**2, axis=0))))
 
     return np.mean(goal, axis=0)
 
@@ -227,7 +228,7 @@ def main():
         Path("/mnt/slowdata/cadaveric-full-arm"),
     ]
     # select label to optimize
-    lbl = 1
+    lbl = 2
 
     # Get validation subjects
     val_subjects = get_validation_subjects(val_subj_dir)

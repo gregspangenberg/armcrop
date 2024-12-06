@@ -45,7 +45,8 @@ def get_ct_path(subject_id: str, ct_dirs: List[Path]) -> Path:
     # list all nrrd files in the directories
     cts_all = []
     for c in ct_dirs:
-        cts_all.extend(c.rglob("*.nrrd"))
+        # cts_all.extend(c.rglob("*.nrrd"))
+        cts_all.extend(c.rglob("*.nii.gz"))
     # remove segmentation files
     cts_all = [c for c in cts_all if ".seg.nrrd" not in c.name]
     # find the CT for the subject
@@ -101,30 +102,41 @@ def format_pytorch3d_boxes(obb_filter, label):
 
 def main():
     # Input paths
-    seg_dir = Path("/home/greg/projects/segment/stage1_yolo_training/database/seg")
+    # seg_dir = Path("/home/greg/projects/segment/stage1_yolo_training/database/seg")
+    seg_dir = Path("/home/greg/projects/segment/stage1_yolo_training/database/seg/exactech")
     val_subj_dir = Path(
         "/home/greg/projects/segment/stage1_yolo_training/datasets/dataset_balanced_obb/labels/val"
     )
+    # ct_dirs = [
+    #     Path("/mnt/slowdata/arthritic-clinical-half-arm"),
+    #     Path("/mnt/slowdata/cadaveric-full-arm"),
+    # ]
     ct_dirs = [
-        Path("/mnt/slowdata/arthritic-clinical-half-arm"),
-        Path("/mnt/slowdata/cadaveric-full-arm"),
+        Path("/mnt/slowdata/exactech_data/no_complications"),
+        Path("/mnt/slowdata/exactech_data/complications"),
     ]
     val_results = {0: [], 1: [], 2: [], 3: [], 4: []}
 
     # Get validation subjects
-    val_subjects = get_validation_subjects(val_subj_dir)
+    # val_subjects = get_validation_subjects(val_subj_dir)
 
     # initialize the obb_cropper
-    obb_cropper = armcrop.OBBCrop2Bone(
-        z_padding=0, xy_padding=0, iou_threshold=0.1, z_iou_interval=50, z_length_min=20
-    )
+    params = {
+        0: (0.23, 21, 20),
+        1: (0.24, 40, 70),
+        2: (0.20, 50, 70),
+        3: (0.28, 30, 70),
+        4: (0.20, 40, 50),
+    }
+
     # Process each segmentation
     subjects = []
     for seg_path in sorted(seg_dir.glob("*.seg.nrrd")):
         subject_id = seg_path.stem.split(".")[0].split("_")[0]
-
-        if subject_id not in val_subjects:
+        if subject_id != "AY-316-R":
             continue
+        # if subject_id not in val_subjects:
+        # continue
         subjects.append(seg_path.stem.split(".")[0])
         # get matching CT
         ct_path = get_ct_path(subject_id, ct_dirs)
@@ -140,7 +152,7 @@ def main():
         print(bone_counts)
 
         # get the predictions from the model
-        obb_cropper = obb_cropper(ct_path)
+        obb_cropper = armcrop.OBBCrop2Bone(ct_path)
 
         for i in range(5):
             if i + 1 not in obb_filter.GetLabels():
@@ -156,17 +168,23 @@ def main():
             vol_true = np.prod(obb_filter.GetOrientedBoundingBoxSize(lbl))
 
             # get the prediction from the model
-            obb_cropper._align(lbl - 1, [0.5, 0.5, 0.5])
+            iou_threshold, z_iou_interval, z_length_min = params[lbl - 1]
+            obb_filters = obb_cropper._obb(
+                lbl - 1,
+                iou_threshold,
+                z_iou_interval,
+                z_length_min,
+            )
+
             pred_obb = []
             vol_pred = []
             center_pred_error = []
-            for _pred_obb in obb_cropper._obb_filters:
+            for _pred_obb in obb_filters:
                 pred_obb.append(format_pytorch3d_boxes(_pred_obb, 1))
                 vol_pred.append(np.prod(_pred_obb.GetOrientedBoundingBoxSize(1)))
                 center_pred_error.append(
                     np.array(_pred_obb.GetOrientedBoundingBoxOrigin(1)) - center_true
                 )
-                print(_pred_obb.GetOrientedBoundingBoxOrigin(1), center_true)
             closest_idx = np.argmin(
                 [np.sqrt(np.sum((err**2), axis=0)) for err in center_pred_error]
             )
@@ -192,11 +210,12 @@ def main():
                     center_pred_error[-1],
                 ]
             )
+            print(val_results)
             print("\n\n")
 
     df = pd.DataFrame(val_results)
     df["subjects"] = subjects
-    df.to_csv("data/val_results.csv")
+    # df.to_csv("tests/stats/val_exac_results.csv")
 
     print(val_results)
 

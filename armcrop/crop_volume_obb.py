@@ -650,8 +650,8 @@ class OBBCrop2Bone:
     def scapula(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        z_iou_threshold=0.19,
-        z_iou_interval=30,
+        z_iou_threshold=0.24,
+        z_iou_interval=40,
         z_length_min=70,
         xy_padding=0,
         z_padding=0,
@@ -677,8 +677,8 @@ class OBBCrop2Bone:
     def humerus(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        z_iou_threshold=0.35,
-        z_iou_interval=20,
+        z_iou_threshold=0.20,
+        z_iou_interval=50,
         z_length_min=70,
         xy_padding=0,
         z_padding=0,
@@ -703,9 +703,9 @@ class OBBCrop2Bone:
     def radius_ulna(
         self,
         obb_spacing=[0.5, 0.5, 0.5],
-        z_iou_threshold=0.25,
+        z_iou_threshold=0.28,
         z_iou_interval=30,
-        z_length_min=100,
+        z_length_min=70,
         xy_padding=0,
         z_padding=0,
     ) -> List[sitk.Image] | List:
@@ -771,9 +771,11 @@ class UnalignOBBSegmentation:
 
 
 if __name__ == "__main__":
-    ct_path = "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd"
+    ct_path = "/mnt/slowdata/exactech_data/no_complications/AY-316-R.nii.gz"
     obb_crop = OBBCrop2Bone(ct_path)
-    print(obb_crop._class_dict)
-    for i, img in enumerate(obb_crop.humerus()):
+    # print(obb_crop._class_dict)
+    for i, img in enumerate(
+        obb_crop.scapula(z_iou_threshold=0.1, z_iou_interval=50, z_length_min=30)
+    ):
         print(img.GetSize())
-        # sitk.WriteImage(img, f"humerus-{i}.nrrd")
+        sitk.WriteImage(img, f"scapula-{i}.nrrd")
