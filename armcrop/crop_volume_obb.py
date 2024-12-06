@@ -581,11 +581,10 @@ class OBBCrop2Bone:
         z_padding: int,
     ) -> List[sitk.Image] | List:
 
-        self._obb_filters = []
         aligned_imgs = []
+        self._resamplers = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
         obb_filters_list = self._obb(c_idx, iou_threshold, z_iou_interval, z_length_min)
-        # if the obb filter, returned None then also return None
 
         for obb_filter in obb_filters_list:
 
@@ -618,6 +617,8 @@ class OBBCrop2Bone:
             # resampler.SetOutputPixelType(sitk.sitkUInt8)
             resampler.SetInterpolator(self.interpolator)
             resampler.SetDefaultPixelValue(-1024)
+            # record the resampler used for testing purposes
+            self._resamplers.append(resampler)
             # get the aligned image, and its array
             aligned_img = resampler.Execute(self.vol)
 
