@@ -1,12 +1,12 @@
 import onnxruntime as rt
 import SimpleITK as sitk
+import SimpleITK.utilities.vtk
+import vtk
 import numpy as np
 import pathlib
 from typing import Tuple, List, Dict
 from math import ceil
 from copy import deepcopy
-import abc
-
 from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
 import huggingface_hub
@@ -772,31 +772,115 @@ class UnalignOBBSegmentation:
 
     def __init__(self, volume_path: str | pathlib.Path):
         self.volume_path = volume_path
+        self.volume = sitk.ReadImage(str(volume_path))
+
+        self.thin_regions = {}
+
+    def set_thin_region(self, thin_regions: Dict[int, Tuple]):
+        """During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
+
+        Args:
+            thin_regions: A dictionary with the index of the thin outer region as the key and a tuple of the inner and outer indices to combine as the value
+        """
+        self.thin_regions = thin_regions
 
     def __call__(self, segmentation_path: str | pathlib.Path) -> sitk.Image:
-        segmentation = sitk.ReadImage(str(segmentation_path))
-        segmentation = sitk.Cast(segmentation, sitk.sitkUInt8)
-        original_csys_seg = sitk.Resample(
-            segmentation,
-            sitk.ReadImage(str(self.volume_path)),
-            sitk.Transform(),
-            sitk.sitkNearestNeighbor,
-            0,
-            # segmentation.GetPixelID(),
-        )
-        return original_csys_seg
+        seg_sitk = sitk.ReadImage(str(segmentation_path))
+        seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
+
+        # Get unique labels
+        seg_array = sitk.GetArrayFromImage(seg_sitk)
+        unique_labels = np.unique(seg_array)
+        unique_labels = unique_labels[unique_labels != 0]  # Remove background
+
+        # transform multi seg to list of binary segs
+        binary_segs = []
+        label_order = []
+        for label in unique_labels:
+            # Create binary mask where label == value
+            if label in self.thin_regions:
+                mask = np.zeros_like(seg_array)
+                for value in self.thin_regions[label]:
+                    mask += (seg_array == value).astype(np.uint8)
+                mask = np.clip(mask, 0, 1)
+
+            else:
+                mask = (seg_array == label).astype(np.uint8)
+
+            binary_sitk = sitk.GetImageFromArray(mask)
+            binary_sitk.CopyInformation(seg_sitk)  # Copy metadata
+
+            # the later elements in the list are overwrite the earlier ones
+            if label in self.thin_regions:
+                binary_segs.insert(0, binary_sitk)
+                label_order.insert(0, label)
+            else:
+                binary_segs.append(binary_sitk)
+                label_order.append(label)
+
+        # create sitk image of 0s that match shape of volume
+        new_seg = sitk.Image(self.volume.GetSize(), sitk.sitkUInt8)
+        new_seg.CopyInformation(self.volume)  # Copy origin, spacing, direction
+        new_seg = SimpleITK.utilities.vtk.sitk2vtk(new_seg)  # convert to VTK
+
+        # generate meshes for each binary seg
+        for i, bs in enumerate(binary_segs):
+            # convert to vtk
+            bs_vtk = SimpleITK.utilities.vtk.sitk2vtk(bs)
+
+            # convert to polydata
+            flying_edges = vtk.vtkDiscreteFlyingEdges3D()
+            flying_edges.SetInputData(bs_vtk)
+            flying_edges.GenerateValues(1, 1, 1)
+            flying_edges.Update()
+            poly = flying_edges.GetOutput()
+
+            # apply windowed sinc filter
+            smoother = vtk.vtkWindowedSincPolyDataFilter()
+            smoother.SetInputData(poly)
+            smoother.SetNumberOfIterations(40)
+            smoother.SetPassBand(0.01)
+            smoother.BoundarySmoothingOff()
+            smoother.NonManifoldSmoothingOn()
+            smoother.NormalizeCoordinatesOn()
+            smoother.Update()
+            poly = smoother.GetOutput()
+
+            # convert to image stencil
+            PolyStencil = vtk.vtkPolyDataToImageStencil()
+            PolyStencil.SetInputData(poly)
+            PolyStencil.SetOutputSpacing(new_seg.GetSpacing())
+            PolyStencil.SetOutputOrigin(new_seg.GetOrigin())
+            PolyStencil.SetOutputWholeExtent(new_seg.GetExtent())
+            PolyStencil.Update()
+
+            # apply stencil to volume
+            stencil = vtk.vtkImageStencil()
+            stencil.SetInputData(new_seg)
+            stencil.SetStencilConnection(PolyStencil.GetOutputPort())
+            stencil.ReverseStencilOn()
+            stencil.SetBackgroundValue(label_order[i])
+            stencil.Update()
+            new_seg = stencil.GetOutput()
+
+        new_seg = SimpleITK.utilities.vtk.vtk2sitk(new_seg)
+        return new_seg
 
 
 if __name__ == "__main__":
     ct_path = "/mnt/slowdata/cadaveric-full-arm/171052R/171052R.nrrd"
 
-    # test obb crop
-    obb_crop = OBBCrop2Bone(ct_path, sitk.sitkBSpline3)
-    # print(obb_crop._class_dict)
-    for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
-        print(img.GetSize())
-        sitk.WriteImage(img, f"scapula-{i}.nrrd")
+    # # test obb crop
+    # obb_crop = OBBCrop2Bone(ct_path, sitk.sitkBSpline3)
+    # # print(obb_crop._class_dict)
+    # for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
+    #     print(img.GetSize())
+    #     sitk.WriteImage(img, f"scapula-{i}.nrrd")
 
-    # # test unaligner
-    # unaligner = UnalignOBBSegmentation(ct_path)
-    # sitk.WriteImage(unaligner("scapula.seg.nrrd"), "scapula_unalgined.seg.nrrd")
+    # test unaligner
+    segmentation_path = (
+        "/home/greg/projects/segment/stage2_net_training/database/seg_obb/scapula/AAW-0.seg.nrrd"
+    )
+    unaligner = UnalignOBBSegmentation(ct_path)
+    # unaligner.set_thin_region({1: (1, 2)})
+    sitk.WriteImage(unaligner(segmentation_path), "scapula_unalgined.seg.nrrd")
