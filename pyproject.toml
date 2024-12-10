@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "armcrop"
-version = "0.3.0"
+version = "0.3.1"
 description = "A machine learning model that crops CT scans to a bone of interest in the arm"
 authors = ["Gregory Spangenberg <gspangen@westerneng.ca>"]
 readme = "README.md"
@@ -13,6 +13,8 @@ pandas = "^2.2.3"
 networkx = "^3.3"
 onnxruntime = "1.18"
 huggingface-hub = "^0.25.1"
+simpleitkutilities = "^0.3.0"
+vtk = "^9.4.0"
 
 
 [tool.poetry.group.dev.dependencies]

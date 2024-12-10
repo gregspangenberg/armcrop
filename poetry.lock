@@ -1818,6 +1818,26 @@ files = [
 ]
 
 [[package]]
+name = "simpleitkutilities"
+version = "0.3.0"
+description = "A collection of utilities and integration tools to enhance SimpleITK."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "SimpleITKUtilities-0.3.0-py3-none-any.whl", hash = "sha256:76db995dc29987c4f0fdd20359ad4940ac1bc91664d5d74f94b231181736d255"},
+    {file = "SimpleITKUtilities-0.3.0.tar.gz", hash = "sha256:9ff4db679810bf228a3ca7416bbb238bf297fdf3260c33b5defaaf828547921f"},
+]
+
+[package.dependencies]
+numpy = "*"
+SimpleITK = ">=2.3.0"
+
+[package.extras]
+dask = ["dask"]
+pyside = ["PySide6"]
+vtk = ["vtk (>=9.0)"]
+
+[[package]]
 name = "six"
 version = "1.16.0"
 description = "Python 2 and 3 compatibility utilities"
@@ -1959,6 +1979,45 @@ socks = ["pysocks (>=1.5.6,!=1.5.7,<2.0)"]
 zstd = ["zstandard (>=0.18.0)"]
 
 [[package]]
+name = "vtk"
+version = "9.4.0"
+description = "VTK is an open-source toolkit for 3D computer graphics, image processing, and visualization"
+optional = false
+python-versions = "*"
+files = [
+    {file = "vtk-9.4.0-cp310-cp310-macosx_10_10_x86_64.whl", hash = "sha256:d12f159913edd06d753f67e582f0199da37b25246e8bfbf7c60b2c391fa1dd39"},
+    {file = "vtk-9.4.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:425bddefcd23da5f485e820204011d28af54e15283ad8a3b93eb4f2ecd42062f"},
+    {file = "vtk-9.4.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5b2b4687367f6f490d3795d6a7a9f85b388cc5c79fb13769260361fb45e6479c"},
+    {file = "vtk-9.4.0-cp310-cp310-win_amd64.whl", hash = "sha256:05fa054cb5d21e20651c3f5113dec2743761dd7592dd56c994610cdf6fa60e49"},
+    {file = "vtk-9.4.0-cp311-cp311-macosx_10_10_x86_64.whl", hash = "sha256:1258a91429adb4e019f359c0d64f5e7513f3f4faf6af2a5b757c56bdcf77338a"},
+    {file = "vtk-9.4.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:c3f22e6defce595944cea924bbc7c5de481d2b530a87e4f63c9fffb7360359da"},
+    {file = "vtk-9.4.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9e29ec25ae3de1ec5dddb4e7da67887b305b58cf073ad3b2407c21dd0c7dc525"},
+    {file = "vtk-9.4.0-cp311-cp311-win_amd64.whl", hash = "sha256:f3a605c69d926690ae707e17d9ee7db830d76a45d052a594acd306916df17208"},
+    {file = "vtk-9.4.0-cp312-cp312-macosx_10_10_x86_64.whl", hash = "sha256:d11bfb89896d793bb6c7cf959646ff38e590556a3e74ffa02e850aa6ebee313e"},
+    {file = "vtk-9.4.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:59e0a70ebc827fd82b97ff0b63a945dd16a8bf23fe1450e6eb9da9e73b0978dc"},
+    {file = "vtk-9.4.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:13e039decf33863b3199f8da101d90e492c967834833ece8a1689db71b3298c1"},
+    {file = "vtk-9.4.0-cp312-cp312-win_amd64.whl", hash = "sha256:533a86e74a58f5b516123cd5d13130df8447bd3ccaf46cb36d2d4443f61d8116"},
+    {file = "vtk-9.4.0-cp313-cp313-macosx_10_10_x86_64.whl", hash = "sha256:3fc41fb7f4fedac9f9308a16d5224cd368f4f6ef8e11874bb0d0315c3e049ec0"},
+    {file = "vtk-9.4.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4b333c13933797bd7807faf02c186de9d6e6d2c38416264a4c5ad913478bb5a5"},
+    {file = "vtk-9.4.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a228543e72870555573dc5313bd74d6b4ff579d3e214b8f9f4abc0eee6ae297a"},
+    {file = "vtk-9.4.0-cp313-cp313-win_amd64.whl", hash = "sha256:d58d9b11e633caffd5f18b7e231c256626c9a18fd11fc34a2a5c2e3dd0d6c7cb"},
+    {file = "vtk-9.4.0-cp38-cp38-macosx_10_10_x86_64.whl", hash = "sha256:edd68d89797562c2f244c3ba43a8a78fffaa4d6663a26529b9d21d71bf197373"},
+    {file = "vtk-9.4.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b9080bceb7bf32c71ae0a8d201c24eab869c3e9a29eb9b7bed4ea363df2cd28c"},
+    {file = "vtk-9.4.0-cp38-cp38-win_amd64.whl", hash = "sha256:46d6c7e0e070ace63792a59ca89667c82c94293beee8da0337914181744f0d09"},
+    {file = "vtk-9.4.0-cp39-cp39-macosx_10_10_x86_64.whl", hash = "sha256:1fdd60f17078746c2ce82d529e438fe3804c52d35a30a1bc1d7b002298cc5a39"},
+    {file = "vtk-9.4.0-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:f6c94cfaa9c70f5ccc7403d5b91d2c3c58265fb3b088007844453281c57c4399"},
+    {file = "vtk-9.4.0-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:439c7ec971d6ee5b694b96339ed11371056a975b45001cabecfc3e9871f83275"},
+    {file = "vtk-9.4.0-cp39-cp39-win_amd64.whl", hash = "sha256:048daf06edb7bd7b657ef3e394ac9cefdaffc86a256b5c898999bbea2fdc8505"},
+]
+
+[package.dependencies]
+matplotlib = ">=2.0.0"
+
+[package.extras]
+numpy = ["numpy (>=1.9)"]
+web = ["wslink (>=1.0.4)"]
+
+[[package]]
 name = "wcwidth"
 version = "0.2.13"
 description = "Measures the displayed width of unicode strings in a terminal"
@@ -1972,4 +2031,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "1be2e89032b9ae3f22eedeb3324a16cd6698f92af3c75fd9299fcd8af811495f"
+content-hash = "807bdb309f7d53e3d4a88d24c6f9b7de96c157a2a934811bcf3439189508fe37"
