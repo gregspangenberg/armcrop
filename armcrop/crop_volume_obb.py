@@ -3,6 +3,7 @@ import SimpleITK as sitk
 import SimpleITK.utilities.vtk
 import vtk
 import numpy as np
+import cv2
 import pathlib
 from typing import Tuple, List, Dict
 from math import ceil
@@ -776,6 +777,47 @@ class UnalignOBBSegmentation:
 
         self.thin_regions = {}
 
+    def force_face_connectivity(self, seg: sitk.Image) -> sitk.Image:
+        """Force 4-point connectivity on each slice in each direction in the segmentation. This bridges small gaps in the segmentation that closing can't fix.
+
+        Args:
+            seg: sitk.Image: The segmentation to force 4-point connectivity on
+
+        Returns:
+            sitk.Image: The segmentation with 4-point connectivity
+        """
+
+        def force_4_connectivity(arr):
+            # Label components using 4-connectivity
+            _, labeled = cv2.connectedComponents(arr.astype(np.uint8), connectivity=4)
+
+            # Find both left and right diagonal neighbors with different labels in one operation
+            left_roll = np.roll(np.roll(labeled, -1, axis=0), -1, axis=1)  # Up-Left
+            right_roll = np.roll(np.roll(labeled, -1, axis=0), 1, axis=1)  # Up-Right
+            diag_diff = ((labeled != left_roll) & (labeled > 0) & (left_roll > 0)) | (
+                (labeled != right_roll) & (labeled > 0) & (right_roll > 0)
+            )
+
+            # Create orthogonal connections once
+            result = arr.copy()
+            result |= np.roll(diag_diff, 1, axis=1)  # Horizontal connection
+            result |= np.roll(diag_diff, 1, axis=0)  # Vertical connection
+
+            return result
+
+        arr = sitk.GetArrayFromImage(seg)
+        for z in range(arr.shape[0]):
+            arr[z, :, :] = force_4_connectivity(arr[z, :, :])
+        for x in range(arr.shape[1]):
+            arr[:, x, :] = force_4_connectivity(arr[:, x, :])
+        for x in range(arr.shape[2]):
+            arr[:, :, x] = force_4_connectivity(arr[:, :, x])
+
+        seg_connected = sitk.GetImageFromArray(arr)
+        seg_connected.CopyInformation(seg)
+
+        return seg_connected
+
     def set_thin_region(self, thin_regions: Dict[int, Tuple]):
         """During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
 
@@ -792,6 +834,7 @@ class UnalignOBBSegmentation:
         seg_array = sitk.GetArrayFromImage(seg_sitk)
         unique_labels = np.unique(seg_array)
         unique_labels = unique_labels[unique_labels != 0]  # Remove background
+        print(unique_labels)
 
         # transform multi seg to list of binary segs
         binary_segs = []
@@ -825,6 +868,7 @@ class UnalignOBBSegmentation:
 
         # generate meshes for each binary seg
         for i, bs in enumerate(binary_segs):
+            print(f"Processing label {label_order[i]}")
             # convert to vtk
             bs_vtk = SimpleITK.utilities.vtk.sitk2vtk(bs)
 
@@ -838,8 +882,12 @@ class UnalignOBBSegmentation:
             # apply windowed sinc filter
             smoother = vtk.vtkWindowedSincPolyDataFilter()
             smoother.SetInputData(poly)
-            smoother.SetNumberOfIterations(40)
-            smoother.SetPassBand(0.01)
+            # less smoothing
+            smoother.SetNumberOfIterations(20)
+            smoother.SetPassBand(0.1)
+            # # more smoothing
+            # smoother.SetNumberOfIterations(40)
+            # smoother.SetPassBand(0.01)
             smoother.BoundarySmoothingOff()
             smoother.NonManifoldSmoothingOn()
             smoother.NormalizeCoordinatesOn()
@@ -863,24 +911,25 @@ class UnalignOBBSegmentation:
             stencil.Update()
             new_seg = stencil.GetOutput()
 
+            print(sitk.GetArrayFromImage(SimpleITK.utilities.vtk.vtk2sitk(new_seg)).shape)
+            print(np.unique(sitk.GetArrayFromImage(SimpleITK.utilities.vtk.vtk2sitk(new_seg))))
+
         new_seg = SimpleITK.utilities.vtk.vtk2sitk(new_seg)
         return new_seg
 
 
 if __name__ == "__main__":
-    ct_path = "/mnt/slowdata/cadaveric-full-arm/171052R/171052R.nrrd"
+    ct_path = "/mnt/slowdata/cadaveric-full-arm/1602058L/1602058L.nrrd"
 
     # # test obb crop
-    # obb_crop = OBBCrop2Bone(ct_path, sitk.sitkBSpline3)
+    # obb_crop = OBBCrop2Bone(ct_path)
     # # print(obb_crop._class_dict)
     # for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
     #     print(img.GetSize())
     #     sitk.WriteImage(img, f"scapula-{i}.nrrd")
 
     # test unaligner
-    segmentation_path = (
-        "/home/greg/projects/segment/stage2_net_training/database/seg_obb/scapula/AAW-0.seg.nrrd"
-    )
+    segmentation_path = "/home/greg/projects/armcrop/scapula_obb.seg.nrrd"
     unaligner = UnalignOBBSegmentation(ct_path)
     # unaligner.set_thin_region({1: (1, 2)})
-    sitk.WriteImage(unaligner(segmentation_path), "scapula_unalgined.seg.nrrd")
+    sitk.WriteImage(unaligner(segmentation_path), "scapula_obb2og_nosmooth.seg.nrrd")
