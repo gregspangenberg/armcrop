@@ -767,17 +767,21 @@ class UnalignOBBSegmentation:
 
     Args:
         volume_path: Path to the original input volume used for obb inference
+        thin_regions: A dictionary with the index of the thin outer region as the key and a tuple of the inner and outer indices to combine as the value. During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
+        force
+        face_connectivity_regions: The index of the regions that should have face connectivity forced on them. This is useful for regions that are thin and have gaps in them after unalignment. This is different than a closing operation becasue it connects forces pixels that are 8-point connected to the rest of the segmetnation to be 4-point connected.
 
     __call__(segmentation_path: str | pathlib.Path) -> sitk.Image:
     """
 
-    def __init__(self, volume_path: str | pathlib.Path):
+    def __init__(self, volume_path: str | pathlib.Path, thin_regions: Dict[int, Tuple] = {}, face_connectivity_regions:List[int]=[]):
         self.volume_path = volume_path
         self.volume = sitk.ReadImage(str(volume_path))
 
-        self.thin_regions = {}
+        self.thin_regions = thin_regions
+        self.face_conncectivity_regions = face_connectivity_regions
 
-    def force_face_connectivity(self, seg: sitk.Image) -> sitk.Image:
+    def _force_face_connectivity(self, seg: sitk.Image) -> sitk.Image:
         """Force 4-point connectivity on each slice in each direction in the segmentation. This bridges small gaps in the segmentation that closing can't fix.
 
         Args:
@@ -819,12 +823,14 @@ class UnalignOBBSegmentation:
         return seg_connected
 
     def set_thin_region(self, thin_regions: Dict[int, Tuple]):
-        """During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
+        """D
 
         Args:
             thin_regions: A dictionary with the index of the thin outer region as the key and a tuple of the inner and outer indices to combine as the value
         """
         self.thin_regions = thin_regions
+    
+    def set_force
 
     def __call__(self, segmentation_path: str | pathlib.Path) -> sitk.Image:
         seg_sitk = sitk.ReadImage(str(segmentation_path))
