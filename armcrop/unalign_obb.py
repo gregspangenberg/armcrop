@@ -6,8 +6,6 @@ import cv2
 import pathlib
 from typing import Tuple, List, Dict
 
-import time
-
 
 def combine_arrays(array_stack):
     """Combine array stack from bottom up, earlier arrays overwrite later ones"""
@@ -98,9 +96,6 @@ class UnalignOBBSegmentation:
         unique_labels = np.unique(seg_array)
         unique_labels = unique_labels[unique_labels != 0]  # Remove background
 
-        # time it
-        start = time.time()
-
         # transform multi seg to list of binary segs
         binary_segs = []
         label_order = []
@@ -130,9 +125,6 @@ class UnalignOBBSegmentation:
         new_seg = sitk.Image(self.volume.GetSize(), sitk.sitkUInt8)
         new_seg.CopyInformation(self.volume)  # Copy origin, spacing, direction
         new_seg = SimpleITK.utilities.vtk.sitk2vtk(new_seg)  # convert to VTK
-
-        print(f"Time to create binary segs: {time.time() - start}")
-        start = time.time()
 
         # generate meshes for each binary seg
         for i, bs in enumerate(binary_segs):
@@ -179,9 +171,6 @@ class UnalignOBBSegmentation:
             new_seg = stencil.GetOutput()
         new_seg = SimpleITK.utilities.vtk.vtk2sitk(new_seg)
 
-        print(f"Time to create stencils: {time.time() - start}")
-        start = time.time()
-
         if self.face_conncectivity_regions:
             seg_array = sitk.GetArrayFromImage(new_seg)
 
@@ -192,19 +181,15 @@ class UnalignOBBSegmentation:
                 for _ in range(self.face_conncectivity_repeats):
                     bm = self._force_face_connectivity(bm)
                 binary_masks.append(bm * label)
-                print(label, np.unique(bm * label, return_counts=True))
 
             for label in unique_labels[~np.isin(unique_labels, self.face_conncectivity_regions)]:
                 binary_masks.append((seg_array == label) * label)
-                print(label, np.unique((seg_array == label) * label, return_counts=True))
 
             arrs_combine = combine_arrays(binary_masks).astype(np.uint8)
-            print(np.unique(arrs_combine, return_counts=True))
 
             new_seg_corrected = sitk.GetImageFromArray(arrs_combine)
             new_seg_corrected.CopyInformation(new_seg)
 
-            print(f"Time to force face connectivity: {time.time() - start}")
             return new_seg_corrected
 
         else:
