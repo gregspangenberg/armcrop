@@ -87,8 +87,8 @@ class UnalignOBBSegmentation:
 
         return arr
 
-    def __call__(self, segmentation_path: str | pathlib.Path) -> sitk.Image:
-        seg_sitk = sitk.ReadImage(str(segmentation_path))
+    def __call__(self, obb_segmentation_path: str | pathlib.Path) -> sitk.Image:
+        seg_sitk = sitk.ReadImage(str(obb_segmentation_path))
         seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
 
         # Get unique labels
