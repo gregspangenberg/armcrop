@@ -122,18 +122,18 @@ class UnalignOBBSegmentation:
                 label_order.append(label)
 
         # create sitk image of 0s that match shape of volume
-        new_seg = sitk.Image(self.volume.GetSize(), sitk.sitkUInt8)
-        new_seg.CopyInformation(self.volume)  # Copy origin, spacing, direction
-        new_seg = SimpleITK.utilities.vtk.sitk2vtk(new_seg)  # convert to VTK
+        B_seg = sitk.Image(self.volume.GetSize(), sitk.sitkUInt8)
+        B_seg.CopyInformation(self.volume)  # Copy origin, spacing, direction
+        B_seg = SimpleITK.utilities.vtk.sitk2vtk(B_seg)  # convert to VTK
 
         # generate meshes for each binary seg
-        for i, bs in enumerate(binary_segs):
+        for i, bin_seg in enumerate(binary_segs):
             # convert to vtk
-            bs_vtk = SimpleITK.utilities.vtk.sitk2vtk(bs)
+            A_seg = SimpleITK.utilities.vtk.sitk2vtk(bin_seg)
 
             # convert to polydata
             flying_edges = vtk.vtkDiscreteFlyingEdges3D()
-            flying_edges.SetInputData(bs_vtk)
+            flying_edges.SetInputData(A_seg)
             flying_edges.GenerateValues(1, 1, 1)
             flying_edges.Update()
             poly = flying_edges.GetOutput()
@@ -153,26 +153,33 @@ class UnalignOBBSegmentation:
             smoother.Update()
             poly = smoother.GetOutput()
 
+            # get B direction
+            B_dir = np.array(B_seg.GetDirectionMatrix().GetData()).reshape(3, 3)
+            # get current origin
+            B_origin = np.array(B_seg.GetOrigin()).reshape(3, 1)
+
             # convert to image stencil
             PolyStencil = vtk.vtkPolyDataToImageStencil()
             PolyStencil.SetInputData(poly)
-            PolyStencil.SetOutputSpacing(new_seg.GetSpacing())
-            PolyStencil.SetOutputOrigin(new_seg.GetOrigin())
-            PolyStencil.SetOutputWholeExtent(new_seg.GetExtent())
+            PolyStencil.SetOutputOrigin(B_seg.GetOrigin())
+            PolyStencil.SetOutputSpacing(B_seg.GetSpacing())
+            PolyStencil.SetOutputWholeExtent(B_seg.GetExtent())
+
             PolyStencil.Update()
 
             # apply stencil to volume
             stencil = vtk.vtkImageStencil()
-            stencil.SetInputData(new_seg)
+            stencil.SetInputData(B_seg)
             stencil.SetStencilConnection(PolyStencil.GetOutputPort())
             stencil.ReverseStencilOn()
             stencil.SetBackgroundValue(label_order[i])
             stencil.Update()
-            new_seg = stencil.GetOutput()
-        new_seg = SimpleITK.utilities.vtk.vtk2sitk(new_seg)
+            B_seg = stencil.GetOutput()
+
+        B_seg = SimpleITK.utilities.vtk.vtk2sitk(B_seg)
 
         if self.face_conncectivity_regions:
-            seg_array = sitk.GetArrayFromImage(new_seg)
+            seg_array = sitk.GetArrayFromImage(B_seg)
 
             # setup correct order of binary masks
             binary_masks = []
@@ -188,23 +195,120 @@ class UnalignOBBSegmentation:
             arrs_combine = combine_arrays(binary_masks).astype(np.uint8)
 
             new_seg_corrected = sitk.GetImageFromArray(arrs_combine)
-            new_seg_corrected.CopyInformation(new_seg)
+            new_seg_corrected.CopyInformation(B_seg)
 
             return new_seg_corrected
 
         else:
-            return new_seg
+            return B_seg
+
+
+class AlignOBBSegmentation(UnalignOBBSegmentation):
+    """
+    Aligns a segmentation made in the original volume to the Oriented Bounding Box
+
+    Args:
+        obb_volume_path: Path to the oriented bounding box volume created after inference
+        thin_regions: A dictionary with the index of the thin outer region as the key and a tuple of the inner and outer indices to combine as the value. During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
+        force
+        face_connectivity_regions: The index of the regions that should have face connectivity forced on them. This is useful for regions that are thin and have gaps in them after unalignment. This is different than a closing operation becasue it connects forces pixels that are 8-point connected to the rest of the segmetnation to be 4-point connected.
+        face_connectivity_repeats: How many times to repeat the face connectivity operation.
+
+    __call__(segmentation_path: str | pathlib.Path) -> sitk.Image:
+    """
+
+    def __init__(
+        self,
+        obb_volume_path: str | pathlib.Path,
+        thin_regions: Dict[int, Tuple] = {},
+        face_connectivity_regions: List[int] = [],
+        face_connectivity_repeats: int = 1,
+    ):
+        super().__init__(
+            obb_volume_path,
+            thin_regions,
+            face_connectivity_regions,
+            face_connectivity_repeats,
+        )
+
+    def __call__(self, segmentation_path: str | pathlib.Path) -> sitk.Image:
+        seg_sitk = sitk.ReadImage(str(segmentation_path))
+        seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
+
+        # Get unique labels
+        seg_array = sitk.GetArrayFromImage(seg_sitk)
+        unique_labels = np.unique(seg_array)
+        unique_labels = unique_labels[unique_labels != 0]  # Remove background
+
+        # transform multi seg to list of binary segs
+        binary_segs = []
+        label_order = []
+        for label in unique_labels:
+            # Create binary mask where label == value
+            if label in self.thin_regions:
+                mask = np.zeros_like(seg_array)
+                for value in self.thin_regions[label]:
+                    mask += (seg_array == value).astype(np.uint8)
+                mask = np.clip(mask, 0, 1)
+
+            else:
+                mask = (seg_array == label).astype(np.uint8)
+
+            binary_sitk = sitk.GetImageFromArray(mask)
+            binary_sitk.CopyInformation(seg_sitk)  # Copy metadata
+
+            # the later elements in the list are overwrite the earlier ones
+            if label in self.thin_regions:
+                binary_segs.insert(0, binary_sitk)
+                label_order.insert(0, label)
+            else:
+                binary_segs.append(binary_sitk)
+                label_order.append(label)
+
+        # generate meshes for each binary seg
+        arrays_bin_segs = []
+        for i, A_seg in enumerate(binary_segs):
+
+            # resample
+            resampler = sitk.ResampleImageFilter()
+            resampler.SetReferenceImage(self.volume)
+            resampler.SetInterpolator(sitk.sitkLabelLinear)
+            B_bin_seg = resampler.Execute(A_seg)
+
+            B_bin_seg_array = sitk.GetArrayFromImage(B_bin_seg).astype(np.uint8)
+
+            if label in self.face_conncectivity_regions:
+                for _ in range(self.face_conncectivity_repeats):
+                    B_bin_seg_array = self._force_face_connectivity(B_bin_seg_array)
+
+            # add in label
+            B_bin_seg_array *= label_order[i]
+            # record array
+            arrays_bin_segs.append(B_bin_seg_array)
+
+        arrs_combine = combine_arrays(arrays_bin_segs)
+
+        B_seg = sitk.GetImageFromArray(arrs_combine)
+        B_seg.CopyInformation(self.volume)
+
+        return B_seg
 
 
 if __name__ == "__main__":
     ct_path = "/mnt/slowdata/cadaveric-full-arm/1602058L/1602058L.nrrd"
+    obb_path = "/home/greg/projects/armcrop/scapula-0.nrrd"
 
     # test unaligner
-    segmentation_path = "/home/greg/projects/armcrop/scapula-obb.seg.nrrd"
-    unaligner = UnalignOBBSegmentation(
+    segmentation_path = "/home/greg/projects/armcrop/scapula_obb.seg.nrrd"
+    # segmentation_path = "/home/greg/projects/armcrop/scapula_obb2og.seg.nrrd"
+    unaligner = AlignOBBSegmentation(
         ct_path,
+        # obb_path,
         thin_regions={1: (1, 2)},
         face_connectivity_regions=[1],
         face_connectivity_repeats=2,
     )
-    sitk.WriteImage(unaligner(segmentation_path), "scapula_obb2og-test.seg.nrrd")
+    unalgined_sitk = unaligner(segmentation_path)
+    print(np.unique(sitk.GetArrayFromImage(sitk.ReadImage(segmentation_path)), return_counts=True))
+    print(np.unique(sitk.GetArrayFromImage(unalgined_sitk), return_counts=True))
+    sitk.WriteImage(unalgined_sitk, "scapula_obb2og2obb.seg.nrrd")

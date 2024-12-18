@@ -514,7 +514,8 @@ class OBBCrop2Bone:
         debug_class=False,
     ):
         self.debug_points = False
-        self.interpolator = sitk.sitkBSpline3
+        # self.interpolator = sitk.sitkBSpline3
+        self.interpolator = sitk.sitkLinear
         if not debug_class:
             self.vol, self._class_dict = predict(volume_path)
         else:
@@ -769,5 +770,14 @@ if __name__ == "__main__":
     obb_crop = OBBCrop2Bone(ct_path)
     # print(obb_crop._class_dict)
     for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
-        print(img.GetSize())
+        # print("obb")
+        # print(img.GetSize())
+        # print(img.GetOrigin())
+        # print(img.GetDirection())
+        # ct = sitk.ReadImage(ct_path)
+        # print("ct")
+        # print(ct.GetSize())
+        # print(ct.GetOrigin())
+        # print(ct.GetDirection())
+
         sitk.WriteImage(img, f"scapula-{i}.nrrd")
