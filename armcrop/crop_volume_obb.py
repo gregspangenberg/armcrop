@@ -514,7 +514,7 @@ class OBBCrop2Bone:
         debug_class=False,
     ):
         self.debug_points = False
-        self.interpolator = sitk.sitkBSpline3/
+        self.interpolator = sitk.sitkBSpline3
         if not debug_class:
             self.vol, self._class_dict = predict(volume_path)
         else:
