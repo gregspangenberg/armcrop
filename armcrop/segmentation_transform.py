@@ -285,10 +285,8 @@ class AlignOBBSegmentation(UnalignOBBSegmentation):
             B_bin_seg_array *= label_order[i]
             # record array
             arrays_bin_segs.append(B_bin_seg_array)
-            print(np.unique(B_bin_seg_array, return_counts=True))
 
         arrs_combine = combine_arrays(arrays_bin_segs)
-        print(np.unique(arrs_combine, return_counts=True))
 
         B_seg = sitk.GetImageFromArray(arrs_combine)
         B_seg.CopyInformation(self.volume)
