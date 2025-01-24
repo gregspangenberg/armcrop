@@ -23,7 +23,7 @@ def get_model() -> str:
     """
     model_path = huggingface_hub.hf_hub_download(
         repo_id="gregspangenberg/armcrop",
-        filename="upperarm_yolo11_obb.onnx",
+        filename="upperarm_yolo11_obb_6.onnx",
     )
     return model_path
 
