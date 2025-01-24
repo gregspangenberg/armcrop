@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "armcrop"
-version = "0.5.4"
+version = "0.5.5"
 description = "A machine learning model that crops CT scans to a bone of interest in the arm"
 authors = ["Gregory Spangenberg <gspangen@westerneng.ca>"]
 readme = "README.md"
