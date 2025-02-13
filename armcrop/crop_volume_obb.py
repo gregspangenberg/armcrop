@@ -1,9 +1,6 @@
 import onnxruntime as rt
 import SimpleITK as sitk
-import SimpleITK.utilities.vtk
-import vtk
 import numpy as np
-import cv2
 import pathlib
 from typing import Tuple, List, Dict
 from math import ceil
@@ -11,7 +8,6 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
 import huggingface_hub
-import time
 
 
 def get_model() -> str:
@@ -768,7 +764,7 @@ if __name__ == "__main__":
     # test obb crop
     obb_crop = OBBCrop2Bone(ct_path)
     # print(obb_crop._class_dict)
-    for i, img in enumerate(obb_crop.scapula([0.25, 0.25, 0.25])):
+    for i, img in enumerate(obb_crop.scapula([0.5, 0.5, 0.5])):
         # print("obb")
         # print(img.GetSize())
         # print(img.GetOrigin())
