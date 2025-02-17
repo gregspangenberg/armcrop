@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 import pathlib
 from typing import Tuple, List, Dict
+from copy import deepcopy
 
 
 def combine_arrays(array_stack):
@@ -27,7 +28,7 @@ class UnalignOBBSegmentation:
     Unaligns a segmentation made in and oriented bounding box to the original volume
 
     Args:
-        volume_path: Path to the original input volume used for obb inference
+        volume: Path to the original input volume, or sitk.Image used for obb inference
         thin_regions: A dictionary with the index of the thin outer region as the key and a tuple of the inner and outer indices to combine as the value. During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
         force
         face_connectivity_regions: The index of the regions that should have face connectivity forced on them. This is useful for regions that are thin and have gaps in them after unalignment. This is different than a closing operation becasue it connects forces pixels that are 8-point connected to the rest of the segmetnation to be 4-point connected.
@@ -38,13 +39,15 @@ class UnalignOBBSegmentation:
 
     def __init__(
         self,
-        volume_path: str | pathlib.Path,
+        volume: str | pathlib.Path | sitk.Image,
         thin_regions: Dict[int, Tuple] = {},
         face_connectivity_regions: List[int] = [],
         face_connectivity_repeats: int = 1,
     ):
-        self.volume_path = volume_path
-        self.volume = sitk.ReadImage(str(volume_path))
+        if isinstance(volume, sitk.Image):
+            self.volume = volume
+        else:
+            self.volume = sitk.ReadImage(str(volume))
 
         self.thin_regions = thin_regions
         self.face_conncectivity_regions = face_connectivity_regions
@@ -87,8 +90,12 @@ class UnalignOBBSegmentation:
 
         return arr
 
-    def __call__(self, obb_segmentation_path: str | pathlib.Path) -> sitk.Image:
-        seg_sitk = sitk.ReadImage(str(obb_segmentation_path))
+    def __call__(self, obb_segmentation: str | pathlib.Path |sitk.Image) -> sitk.Image:
+    
+        if isinstance(obb_segmentation, sitk.Image):
+            seg_sitk = deepcopy(obb_segmentation)
+        else:
+            seg_sitk = sitk.ReadImage(str(obb_segmentation))
         seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
 
         # Get unique labels
@@ -208,7 +215,7 @@ class AlignOBBSegmentation(UnalignOBBSegmentation):
     Aligns a segmentation made in the original volume to the Oriented Bounding Box
 
     Args:
-        obb_volume_path: Path to the oriented bounding box volume created after inference
+        obb_volume: Path to the oriented bounding box volume or sitk.Image created after inference
         thin_regions: A dictionary with the index of the thin outer region as the key and a tuple of the inner and outer indices to combine as the value. During unalignment thin regions can generate holes in the segmention. If there is an inner and outer region as seperate classes the outer region will have holes generated in its surface during unalignmnet. To prevent this you can combine the outer and inner regions during unalignment and the seperate them again after unalignment.
         force
         face_connectivity_regions: The index of the regions that should have face connectivity forced on them. This is useful for regions that are thin and have gaps in them after unalignment. This is different than a closing operation becasue it connects forces pixels that are 8-point connected to the rest of the segmetnation to be 4-point connected.
@@ -219,20 +226,23 @@ class AlignOBBSegmentation(UnalignOBBSegmentation):
 
     def __init__(
         self,
-        obb_volume_path: str | pathlib.Path,
+        obb_volume: str | pathlib.Path | sitk.Image,
         thin_regions: Dict[int, Tuple] = {},
         face_connectivity_regions: List[int] = [],
         face_connectivity_repeats: int = 1,
     ):
         super().__init__(
-            obb_volume_path,
+            obb_volume,
             thin_regions,
             face_connectivity_regions,
             face_connectivity_repeats,
         )
 
-    def __call__(self, segmentation_path: str | pathlib.Path) -> sitk.Image:
-        seg_sitk = sitk.ReadImage(str(segmentation_path))
+    def __call__(self, segmentation: str | pathlib.Path |sitk.Image) -> sitk.Image:
+        if isinstance(segmentation, sitk.Image):
+            seg_sitk = deepcopy(segmentation)
+        else:
+            seg_sitk = sitk.ReadImage(str(segmentation))
         seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
 
         # Get unique labels
