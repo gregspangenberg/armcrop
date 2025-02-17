@@ -62,19 +62,22 @@ def load_model(img_size) -> rt.InferenceSession:
     return model
 
 
-def load_volume(volume_path: pathlib.Path, img_size=(640, 640)) -> Tuple[sitk.Image, sitk.Image]:
+def load_volume(volume: pathlib.Path | sitk.Image, img_size=(640, 640)) -> Tuple[sitk.Image, sitk.Image]:
     """
     Load a volume and preprcoess it for inference
 
     Args:
-        volume_path: Path to the input volume for inference
+        volume: Path to the input volume for inference, or the sitk.Image volume
         img_size: Image size required for the ML model. Defaults to (640, 640).
 
     Returns:
         vol: The original volume
         vol_t: The preprocessed volume
     """
-    vol = sitk.ReadImage(str(volume_path))
+    if isinstance(volume, sitk.Image):
+        vol = deepcopy(volume)
+    else:
+        vol = sitk.ReadImage(str(volume))
     vol_t = deepcopy(vol)
     vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
     vol_t = sitk.Clamp(vol_t, sitk.sitkFloat32, -1024, 3000)
@@ -94,12 +97,12 @@ def load_volume(volume_path: pathlib.Path, img_size=(640, 640)) -> Tuple[sitk.Im
     return vol, vol_t
 
 
-def load(volume_path, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]:
+def load(volume, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]:
     """
     Load the ML model and the volume for inference
 
     Args:
-        volume_path: path to the volume for inference
+        volume: path to the volume for inference, or an sitk.Image object
         img_size: pixel size required for the ML model
 
     Returns:
@@ -109,7 +112,7 @@ def load(volume_path, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.I
     """
     with ThreadPoolExecutor() as executor:
         # Apply the tasks asynchronously
-        volume_result = executor.submit(load_volume, volume_path, img_size)
+        volume_result = executor.submit(load_volume, volume, img_size)
         model_result = executor.submit(load_model, img_size)
 
         # Wait for results
@@ -439,12 +442,12 @@ def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_lengt
     return ds_sets
 
 
-def predict(volume_path: str | pathlib.Path) -> Tuple[sitk.Image, Dict]:
+def predict(volume: str | pathlib.Path |sitk.Image) -> Tuple[sitk.Image, Dict]:
     """
     Predict the oriented bounding boxes for each class in the input volume
 
     Args:
-        volume_path: Path to the input volume for inference
+        volume: Path to the input volume for inference, or the sitk.Image object
 
     Returns:
         vol: The original volume
@@ -452,7 +455,7 @@ def predict(volume_path: str | pathlib.Path) -> Tuple[sitk.Image, Dict]:
     """
     # Initialize model with specified image dimensions and load volume
     img_size = (640, 640)
-    model, vol, vol_t = load(volume_path, img_size)
+    model, vol, vol_t = load(volume, img_size)
 
     # Process each axial slice for prediction
     data = []
@@ -483,7 +486,7 @@ class OBBCrop2Bone:
     Aligns oriented bounding box volumes to bones in the input volume
 
     Args:
-        volume_path: Path to the input volume for inference
+        volume: Path to the input volume for inference, or the sitk.Image object
 
     Methods:
 
@@ -506,15 +509,15 @@ class OBBCrop2Bone:
 
     def __init__(
         self,
-        volume_path: str | pathlib.Path,
+        volume: str | pathlib.Path | sitk.Image,
         debug_class=False,
     ):
         self.debug_points = False
         self.interpolator = sitk.sitkBSpline3
         if not debug_class:
-            self.vol, self._class_dict = predict(volume_path)
+            self.vol, self._class_dict = predict(volume)
         else:
-            self.vol = sitk.ReadImage(str(volume_path))
+            self.vol = sitk.ReadImage(str(volume))
             self._class_dict = {}
 
     def _obb(
