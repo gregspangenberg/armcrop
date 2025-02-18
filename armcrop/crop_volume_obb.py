@@ -442,7 +442,7 @@ def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_lengt
     return ds_sets
 
 
-def predict(volume: str | pathlib.Path |sitk.Image) -> Tuple[sitk.Image, Dict]:
+def predict(volume: str | pathlib.Path |sitk.Image, conf_thres, iou_thres) -> Tuple[sitk.Image, Dict]:
     """
     Predict the oriented bounding boxes for each class in the input volume
 
@@ -470,7 +470,7 @@ def predict(volume: str | pathlib.Path |sitk.Image) -> Tuple[sitk.Image, Dict]:
         # run inference on the image
         output = model.run(None, {"images": arr})
         # perform non-max supression on the output
-        preds = non_max_suppression_rotated(output[0])[0]
+        preds = non_max_suppression_rotated(output[0], conf_thres, iou_thres)[0]
         # add the z coordinate to the predictions
         preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
         data.extend(preds)
@@ -487,6 +487,8 @@ class OBBCrop2Bone:
 
     Args:
         volume: Path to the input volume for inference, or the sitk.Image object
+        confidence_threshold: The confidence threshold below which boxes will be filtered out. Valid values are between 0.0 and 1.0. Defaults to 0.5.
+        iou_supress_threshold: The IoU threshold above which boxes will be considered duplicates and filtered out during NMS. Valid values are between 0.0 and 1.0. Defaults to 0.4.
 
     Methods:
 
@@ -510,18 +512,20 @@ class OBBCrop2Bone:
     def __init__(
         self,
         volume: str | pathlib.Path | sitk.Image,
+        confidence_threshold=0.5,
+        iou_supress_threshold=0.4,
         debug_class=False,
     ):
         self.debug_points = False
         self.interpolator = sitk.sitkBSpline3
         if not debug_class:
-            self.vol, self._class_dict = predict(volume)
+            self.vol, self._class_dict = predict(volume,confidence_threshold, iou_supress_threshold)
         else:
             self.vol = sitk.ReadImage(str(volume))
             self._class_dict = {}
 
     def _obb(
-        self, c_idx: int, iou_threshold: float, z_iou_interval: int, z_length_min: int
+        self, c_idx: int, iou_group_threshold: float, z_iou_interval: int, z_length_min: int
     ) -> List[sitk.LabelShapeStatisticsImageFilter] | List:
 
         # Process all instances of the class and align volumes according to oriented bounding boxes
@@ -531,7 +535,7 @@ class OBBCrop2Bone:
             obb_filters_list = []
             # group bounding boxes in the z direction based on IoU
             groups = iou_volume(
-                self._class_dict, c_idx, self.vol, iou_threshold, z_iou_interval, z_length_min
+                self._class_dict, c_idx, self.vol, iou_group_threshold, z_iou_interval, z_length_min
             )
 
             xywhr, _, _, z = np.split(self._class_dict[c_idx], [5, 6, 7], axis=1)
