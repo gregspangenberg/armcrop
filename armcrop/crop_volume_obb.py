@@ -129,7 +129,7 @@ def load(volume, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]
 
 
 def non_max_suppression_rotated(
-    prediction, conf_thres=0.5, iou_thres=0.4
+    prediction, conf_thres, iou_thres
 ) -> List[np.ndarray]:
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
