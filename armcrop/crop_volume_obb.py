@@ -44,7 +44,9 @@ def load_model(img_size) -> rt.InferenceSession:
                     "CUDAExecutionProvider",
                     {
                         "device_id": torch.cuda.current_device(),
-                        "user_compute_stream": str(torch.cuda.current_stream().cuda_stream),
+                        "user_compute_stream": str(
+                            torch.cuda.current_stream().cuda_stream
+                        ),
                     },
                 )
             ]
@@ -62,7 +64,9 @@ def load_model(img_size) -> rt.InferenceSession:
     return model
 
 
-def load_volume(volume: pathlib.Path | sitk.Image, img_size=(640, 640)) -> Tuple[sitk.Image, sitk.Image]:
+def load_volume(
+    volume: pathlib.Path | sitk.Image, img_size=(640, 640)
+) -> Tuple[sitk.Image, sitk.Image]:
     """
     Load a volume and preprcoess it for inference
 
@@ -89,7 +93,10 @@ def load_volume(volume: pathlib.Path | sitk.Image, img_size=(640, 640)) -> Tuple
     reference_image.SetOrigin(vol_t.GetOrigin())
     reference_image.SetDirection(vol_t.GetDirection())
     reference_image.SetSpacing(
-        [sz * spc / nsz for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())]
+        [
+            sz * spc / nsz
+            for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())
+        ]
     )
 
     vol_t = sitk.Resample(vol_t, reference_image)
@@ -121,7 +128,9 @@ def load(volume, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]
     return model, vol, vol_t
 
 
-def non_max_suppression_rotated(prediction, conf_thres=0.5, iou_thres=0.4) -> List[np.ndarray]:
+def non_max_suppression_rotated(
+    prediction, conf_thres=0.5, iou_thres=0.4
+) -> List[np.ndarray]:
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
 
@@ -144,7 +153,9 @@ def non_max_suppression_rotated(prediction, conf_thres=0.5, iou_thres=0.4) -> Li
     assert (
         0 <= conf_thres <= 1
     ), f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
-    assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
+    assert (
+        0 <= iou_thres <= 1
+    ), f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
     bs = prediction.shape[0]  # batch size (BCN,. Defaults to 1,84,6300)
     nc = 5  # number of classes
@@ -262,7 +273,8 @@ def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
 
     # Calculate second term (cross term) of Bhattacharyya distance
     t2 = (
-        ((c1 + c2) * (x2 - x1) * (y1 - y2)) / ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2) + eps)
+        ((c1 + c2) * (x2 - x1) * (y1 - y2))
+        / ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2) + eps)
     ) * 0.5
 
     # Calculate third term (determinant term) of Bhattacharyya distance
@@ -272,7 +284,8 @@ def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
             / (
                 4
                 * np.sqrt(
-                    (a1 * b1 - (np.power(c1, 2)).clip(0)) * (a2 * b2 - (np.power(c2, 2)).clip(0))
+                    (a1 * b1 - (np.power(c1, 2)).clip(0))
+                    * (a2 * b2 - (np.power(c2, 2)).clip(0))
                 )
                 + eps
             )
@@ -400,7 +413,9 @@ def class_dict_construct(data) -> Dict:
     return class_data
 
 
-def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50) -> List:
+def iou_volume(
+    class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50
+) -> List:
     """#
     This function groups the bounding boxes in the z direction based on their IoU. It groups boxes that have an IoU greater than 0.1 in the z direction.
 
@@ -442,7 +457,9 @@ def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_lengt
     return ds_sets
 
 
-def predict(volume: str | pathlib.Path |sitk.Image, conf_thres, iou_thres) -> Tuple[sitk.Image, Dict]:
+def predict(
+    volume: str | pathlib.Path | sitk.Image, conf_thres, iou_thres
+) -> Tuple[sitk.Image, Dict]:
     """
     Predict the oriented bounding boxes for each class in the input volume
 
@@ -519,13 +536,19 @@ class OBBCrop2Bone:
         self.debug_points = False
         self.interpolator = sitk.sitkBSpline3
         if not debug_class:
-            self.vol, self._class_dict = predict(volume,confidence_threshold, iou_supress_threshold)
+            self.vol, self._class_dict = predict(
+                volume, confidence_threshold, iou_supress_threshold
+            )
         else:
             self.vol = sitk.ReadImage(str(volume))
             self._class_dict = {}
 
     def _obb(
-        self, c_idx: int, iou_group_threshold: float, z_iou_interval: int, z_length_min: int
+        self,
+        c_idx: int,
+        iou_group_threshold: float,
+        z_iou_interval: int,
+        z_length_min: int,
     ) -> List[sitk.LabelShapeStatisticsImageFilter] | List:
 
         # Process all instances of the class and align volumes according to oriented bounding boxes
@@ -535,7 +558,12 @@ class OBBCrop2Bone:
             obb_filters_list = []
             # group bounding boxes in the z direction based on IoU
             groups = iou_volume(
-                self._class_dict, c_idx, self.vol, iou_group_threshold, z_iou_interval, z_length_min
+                self._class_dict,
+                c_idx,
+                self.vol,
+                iou_group_threshold,
+                z_iou_interval,
+                z_length_min,
             )
 
             xywhr, _, _, z = np.split(self._class_dict[c_idx], [5, 6, 7], axis=1)
@@ -548,7 +576,9 @@ class OBBCrop2Bone:
                 # convert to xy format
                 xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group)
                 # clip to volume dimensions to avoid out of bounds errors
-                xyxyxyxy_group = np.clip(xyxyxyxy_group, 0, int(self.vol.GetHeight() - 1))
+                xyxyxyxy_group = np.clip(
+                    xyxyxyxy_group, 0, int(self.vol.GetHeight() - 1)
+                )
                 # add in the z coordinate
                 z_group = np.repeat(np.expand_dims(z[group], axis=1), 4, axis=1)
                 xyz = np.concatenate([xyxyxyxy_group, z_group], axis=-1)
@@ -655,7 +685,13 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
         return self._align(
-            0, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            0,
+            obb_spacing,
+            z_iou_threshold,
+            z_iou_interval,
+            z_length_min,
+            xy_padding,
+            z_padding,
         )
 
     def scapula(
@@ -682,7 +718,13 @@ class OBBCrop2Bone:
         """
 
         return self._align(
-            1, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            1,
+            obb_spacing,
+            z_iou_threshold,
+            z_iou_interval,
+            z_length_min,
+            xy_padding,
+            z_padding,
         )
 
     def humerus(
@@ -708,7 +750,13 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
         return self._align(
-            2, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            2,
+            obb_spacing,
+            z_iou_threshold,
+            z_iou_interval,
+            z_length_min,
+            xy_padding,
+            z_padding,
         )
 
     def radius_ulna(
@@ -735,7 +783,13 @@ class OBBCrop2Bone:
         """
 
         return self._align(
-            3, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            3,
+            obb_spacing,
+            z_iou_threshold,
+            z_iou_interval,
+            z_length_min,
+            xy_padding,
+            z_padding,
         )
 
     def hand(
@@ -761,7 +815,13 @@ class OBBCrop2Bone:
             aligned_imgs: A list of the aligned images
         """
         return self._align(
-            4, obb_spacing, z_iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+            4,
+            obb_spacing,
+            z_iou_threshold,
+            z_iou_interval,
+            z_length_min,
+            xy_padding,
+            z_padding,
         )
 
 
