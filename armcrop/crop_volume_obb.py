@@ -79,7 +79,7 @@ def load_volume(
         vol_t: The preprocessed volume
     """
     if isinstance(volume, sitk.Image):
-        vol = deepcopy(volume)
+        vol = volume
     else:
         vol = sitk.ReadImage(str(volume))
     vol_t = deepcopy(vol)

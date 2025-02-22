@@ -5,7 +5,6 @@ import numpy as np
 import cv2
 import pathlib
 from typing import Tuple, List, Dict
-from copy import deepcopy
 
 
 def combine_arrays(array_stack):
@@ -93,7 +92,7 @@ class UnalignOBBSegmentation:
     def __call__(self, obb_segmentation: str | pathlib.Path |sitk.Image) -> sitk.Image:
     
         if isinstance(obb_segmentation, sitk.Image):
-            seg_sitk = deepcopy(obb_segmentation)
+            seg_sitk = obb_segmentation
         else:
             seg_sitk = sitk.ReadImage(str(obb_segmentation))
         seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
@@ -240,7 +239,7 @@ class AlignOBBSegmentation(UnalignOBBSegmentation):
 
     def __call__(self, segmentation: str | pathlib.Path |sitk.Image) -> sitk.Image:
         if isinstance(segmentation, sitk.Image):
-            seg_sitk = deepcopy(segmentation)
+            seg_sitk = segmentation
         else:
             seg_sitk = sitk.ReadImage(str(segmentation))
         seg_sitk = sitk.Cast(seg_sitk, sitk.sitkInt8)
