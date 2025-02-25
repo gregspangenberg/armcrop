@@ -9,6 +9,9 @@ from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
 import huggingface_hub
 
+# disable logging
+rt.set_default_logger_severity(3)
+
 
 def get_model() -> str:
     """
@@ -44,9 +47,7 @@ def load_model(img_size) -> rt.InferenceSession:
                     "CUDAExecutionProvider",
                     {
                         "device_id": torch.cuda.current_device(),
-                        "user_compute_stream": str(
-                            torch.cuda.current_stream().cuda_stream
-                        ),
+                        "user_compute_stream": str(torch.cuda.current_stream().cuda_stream),
                     },
                 )
             ]
@@ -93,10 +94,7 @@ def load_volume(
     reference_image.SetOrigin(vol_t.GetOrigin())
     reference_image.SetDirection(vol_t.GetDirection())
     reference_image.SetSpacing(
-        [
-            sz * spc / nsz
-            for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())
-        ]
+        [sz * spc / nsz for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())]
     )
 
     vol_t = sitk.Resample(vol_t, reference_image)
@@ -128,9 +126,7 @@ def load(volume, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]
     return model, vol, vol_t
 
 
-def non_max_suppression_rotated(
-    prediction, conf_thres, iou_thres
-) -> List[np.ndarray]:
+def non_max_suppression_rotated(prediction, conf_thres, iou_thres) -> List[np.ndarray]:
     """
     Perform non-maximum suppression (NMS) on a set of boxes, with support for masks and multiple labels per box.
 
@@ -153,9 +149,7 @@ def non_max_suppression_rotated(
     assert (
         0 <= conf_thres <= 1
     ), f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
-    assert (
-        0 <= iou_thres <= 1
-    ), f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
+    assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
     bs = prediction.shape[0]  # batch size (BCN,. Defaults to 1,84,6300)
     nc = 5  # number of classes
@@ -273,8 +267,7 @@ def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
 
     # Calculate second term (cross term) of Bhattacharyya distance
     t2 = (
-        ((c1 + c2) * (x2 - x1) * (y1 - y2))
-        / ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2) + eps)
+        ((c1 + c2) * (x2 - x1) * (y1 - y2)) / ((a1 + a2) * (b1 + b2) - np.power((c1 + c2), 2) + eps)
     ) * 0.5
 
     # Calculate third term (determinant term) of Bhattacharyya distance
@@ -284,8 +277,7 @@ def batch_probiou(obb1, obb2, eps=1e-7) -> np.ndarray:
             / (
                 4
                 * np.sqrt(
-                    (a1 * b1 - (np.power(c1, 2)).clip(0))
-                    * (a2 * b2 - (np.power(c2, 2)).clip(0))
+                    (a1 * b1 - (np.power(c1, 2)).clip(0)) * (a2 * b2 - (np.power(c2, 2)).clip(0))
                 )
                 + eps
             )
@@ -413,9 +405,7 @@ def class_dict_construct(data) -> Dict:
     return class_data
 
 
-def iou_volume(
-    class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50
-) -> List:
+def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_length_min=50) -> List:
     """#
     This function groups the bounding boxes in the z direction based on their IoU. It groups boxes that have an IoU greater than 0.1 in the z direction.
 
@@ -576,9 +566,7 @@ class OBBCrop2Bone:
                 # convert to xy format
                 xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group)
                 # clip to volume dimensions to avoid out of bounds errors
-                xyxyxyxy_group = np.clip(
-                    xyxyxyxy_group, 0, int(self.vol.GetHeight() - 1)
-                )
+                xyxyxyxy_group = np.clip(xyxyxyxy_group, 0, int(self.vol.GetHeight() - 1))
                 # add in the z coordinate
                 z_group = np.repeat(np.expand_dims(z[group], axis=1), 4, axis=1)
                 xyz = np.concatenate([xyxyxyxy_group, z_group], axis=-1)
