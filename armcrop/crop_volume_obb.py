@@ -606,10 +606,13 @@ class OBBCrop2Bone:
 
         aligned_imgs = []
         self._resamplers = []
+        self.detection_means = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
         obb_filters_list = self._obb(c_idx, iou_threshold, z_iou_interval, z_length_min)
 
         for obb_filter in obb_filters_list:
+            # get mean of detection not obb
+            self.detection_means.append(obb_filter.GetCentroid(1))
 
             # get the direction of the obb and transpose it
             _d = obb_filter.GetOrientedBoundingBoxDirection(1)
