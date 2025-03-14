@@ -284,7 +284,7 @@ class AlignOBBSegmentation(UnalignOBBSegmentation):
             resampler.SetInterpolator(sitk.sitkLabelLinear)
             B_bin_seg = resampler.Execute(A_seg)
 
-            B_bin_seg_array = sitk.GetArrayFromImage(B_bin_seg).astype(np.uint8)
+            B_bin_seg_array = sitk.GetArrayFromImage(B_bin_seg).astype(np.int16)
 
             if label in self.face_conncectivity_regions:
                 for _ in range(self.face_conncectivity_repeats):
