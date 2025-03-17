@@ -626,18 +626,28 @@ class OBBCrop2Bone:
                 for i in range(3)
             ]
             # along the long axis, add the z padding, and xy padding for the other 2
-            xy_padding = xy_padding / obb_spacing[0]
-            z_padding = z_padding / obb_spacing[2]
+            xy_padding_pix = xy_padding / obb_spacing[0]
+            z_padding_pix = z_padding / obb_spacing[2]
             aligned_img_size = [
                 (
-                    int(aligned_img_size[i] + 2 * z_padding)
+                    int(aligned_img_size[i] + 2 * z_padding_pix)
                     if aligned_img_size[i] == max(aligned_img_size)
-                    else int(aligned_img_size[i] + 2 * xy_padding)
+                    else int(aligned_img_size[i] + 2 * xy_padding_pix)
                 )
                 for i in range(3)
             ]
+            # need to offset the origin by the padding
+            obb_origin = obb_filter.GetOrientedBoundingBoxOrigin(1)
+            obb_centroid = obb_filter.GetCentroid(1)
+            offset_dir = np.sign(np.array(obb_origin) - np.array(obb_centroid))
+            origin_offset = offset_dir * [
+                z_padding if aligned_img_size[i] == max(aligned_img_size) else xy_padding
+                for i in range(3)
+            ]
+            new_origin = np.array(obb_origin) + origin_offset
+
             resampler.SetOutputDirection(aligned_img_dir)
-            resampler.SetOutputOrigin(obb_filter.GetOrientedBoundingBoxOrigin(1))
+            resampler.SetOutputOrigin(new_origin)
             resampler.SetOutputSpacing(obb_spacing)
             resampler.SetSize(aligned_img_size)
             # resampler.SetOutputPixelType(sitk.sitkUInt8)
