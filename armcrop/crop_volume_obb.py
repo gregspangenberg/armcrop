@@ -647,7 +647,7 @@ class OBBCrop2Bone:
             new_origin = np.array(obb_origin) + origin_offset
 
             resampler.SetOutputDirection(aligned_img_dir)
-            resampler.SetOutputOrigin(new_origin)
+            resampler.SetOutputOrigin(obb_origin)
             resampler.SetOutputSpacing(obb_spacing)
             resampler.SetSize(aligned_img_size)
             # resampler.SetOutputPixelType(sitk.sitkUInt8)
@@ -827,12 +827,12 @@ class OBBCrop2Bone:
 
 
 if __name__ == "__main__":
-    ct_path = "/mnt/slowdata/cadaveric-full-arm/1602058L/1602058L.nrrd"
+    ct_path = "/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd"
 
     # test obb crop
     obb_crop = OBBCrop2Bone(ct_path)
     # print(obb_crop._class_dict)
-    for i, img in enumerate(obb_crop.scapula([0.5, 0.5, 0.5])):
+    for i, img in enumerate(obb_crop.humerus([0.5, 0.5, 0.5], 0.01, 150, 20, 10, 10)):
         # print("obb")
         # print(img.GetSize())
         # print(img.GetOrigin())
@@ -843,4 +843,4 @@ if __name__ == "__main__":
         # print(ct.GetOrigin())
         # print(ct.GetDirection())
 
-        sitk.WriteImage(img, f"scapula-{i}.nrrd")
+        sitk.WriteImage(img, f"1606011L-{i}.nrrd")
