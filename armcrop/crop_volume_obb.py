@@ -338,9 +338,10 @@ def regularize_rboxes(rboxes):
     return np.concatenate([x, y, w_, h_, t], axis=-1)  # regularized boxes
 
 
-def xywhr2xyxyxyxy(x, round=True):
+def xywhr2xyxyxyxy(x, round=True, pad=0):
     """
     Convert batched Oriented Bounding Boxes (OBB) from [xywh, rotation] to [xy1, xy2, xy3, xy4].
+    Where xy1 is the top-left corner, xy2 is the top-right corner, xy3 is the bottom-right corner, and xy4 is the bottom-left corner.
 
     Args:
         x (numpy.ndarray): Boxes in [cx, cy, w, h, rotation] format of shape (n, 5) or (b, n, 5).
@@ -353,6 +354,10 @@ def xywhr2xyxyxyxy(x, round=True):
 
     ctr = rboxes[..., :2]
     w, h, angle = (rboxes[..., i : i + 1] for i in range(2, 5))
+
+    # add padding to the width and height
+    w += pad
+    h += pad
 
     cos_value = np.cos(angle)
     sin_value = np.sin(angle)
@@ -375,6 +380,60 @@ def xywhr2xyxyxyxy(x, round=True):
         pt4 = ctr - vec1 + vec2
 
     return np.stack([pt1, pt2, pt3, pt4], axis=-2)
+
+
+def duplicate_first_last(arr: np.ndarray, n: int) -> np.ndarray:
+    """
+    Duplicate the first and last n elements of a numpy array.
+
+    Args:
+        arr (np.ndarray): Input 1D numpy array.
+        n (int): Number of elements to duplicate at the start and end.
+
+    Returns:
+        np.ndarray: New array with duplicated elements.
+    """
+    if n <= 0 or len(arr) < n:
+        return arr
+    first_slice = arr[0, :]
+    first_slice = np.expand_dims(first_slice, axis=0)
+    last_slice = arr[-1, :]
+    last_slice = np.expand_dims(last_slice, axis=0)
+
+    # Repeat the slices n times along the specified axis
+    first_repeated = np.repeat(first_slice, n, axis=0)
+    last_repeated = np.repeat(last_slice, n, axis=0)
+
+    # Concatenate along the specified axis
+    return np.concatenate([first_repeated, arr, last_repeated], axis=0)
+
+
+def extend_first_last(arr: np.ndarray, n: int) -> np.ndarray:
+    """
+    Duplicate the first and last n elements of a numpy array.
+
+    Args:
+        arr (np.ndarray): Input 1D numpy array.
+        n (int): Number of elements to duplicate at the start and end.
+
+    Returns:
+        np.ndarray: New array with duplicated elements.
+    """
+    if n <= 0 or len(arr) < n:
+        return arr
+    first_slice = arr[0, :]
+    last_slice = arr[-1, :]
+
+    # Repeat the slices n times along the specified axis
+    first_repeated = np.repeat(first_slice, n, axis=0)
+    first_repeated += np.arange(1, n + 1)
+    first_repeated = np.expand_dims(first_repeated, axis=-1)
+
+    last_repeated = np.repeat(last_slice, n, axis=0)
+    last_repeated -= np.arange(1, n + 1)
+    last_repeated = np.expand_dims(last_repeated, axis=-1)
+    # Concatenate along the specified axis
+    return np.concatenate([first_repeated, arr, last_repeated], axis=0)
 
 
 def class_dict_construct(data) -> Dict:
@@ -533,19 +592,21 @@ class OBBCrop2Bone:
             self.vol = sitk.ReadImage(str(volume))
             self._class_dict = {}
 
-    def _obb(
+    def _bounding_boxes_rotated(
         self,
         c_idx: int,
         iou_group_threshold: float,
         z_iou_interval: int,
         z_length_min: int,
+        xy_padding: int,
+        z_padding: int,
     ) -> List[sitk.LabelShapeStatisticsImageFilter] | List:
 
         # Process all instances of the class and align volumes according to oriented bounding boxes
         if self._class_dict[c_idx] is None:
             return []
         else:
-            obb_filters_list = []
+            xyz_groups = []
             # group bounding boxes in the z direction based on IoU
             groups = iou_volume(
                 self._class_dict,
@@ -556,42 +617,92 @@ class OBBCrop2Bone:
                 z_length_min,
             )
 
+            # # convert padding in mm to pixels
+            z_padding = int(z_padding / self.vol.GetSpacing()[-1])
+            xy_padding = int(xy_padding / self.vol.GetSpacing()[0])
+
+            # # get x,y,z bounds of the image
+            z_bounds = self.vol.GetDepth()
+            xy_bounds = self.vol.GetHeight()
+
             xywhr, _, _, z = np.split(self._class_dict[c_idx], [5, 6, 7], axis=1)
+
+            # add padding to z
+            z = extend_first_last(z, n=int(z_padding / 2))
+            xywhr = duplicate_first_last(xywhr, n=int(z_padding / 2))
+
             for group in groups:
                 # get the vertices of the group
                 xywhr_group = xywhr[group]
                 # Scale coordinates back to original volume dimensions
                 xywhr_group[:, :-1] /= 640.0
-                xywhr_group[:, :-1] *= float(self.vol.GetHeight())
+                xywhr_group[:, :-1] *= float(xy_bounds)
                 # convert to xy format
-                xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group)
+                xyxyxyxy_group = xywhr2xyxyxyxy(xywhr_group, pad=xy_padding)
                 # clip to volume dimensions to avoid out of bounds errors
-                xyxyxyxy_group = np.clip(xyxyxyxy_group, 0, int(self.vol.GetHeight() - 1))
+                xyxyxyxy_group = np.clip(xyxyxyxy_group, 0, int(xy_bounds - 1))
+
                 # add in the z coordinate
                 z_group = np.repeat(np.expand_dims(z[group], axis=1), 4, axis=1)
                 xyz = np.concatenate([xyxyxyxy_group, z_group], axis=-1)
                 xyz = xyz.reshape(-1, 3)
                 xyz = xyz.astype(int)
-
-                # Create boolean image marking box vertices
-                zyx_bool = np.zeros(np.flip(self.vol.GetSize()))
-                zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
-                zyx_bool = sitk.GetImageFromArray(zyx_bool)
-                zyx_bool.CopyInformation(self.vol)
-                zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
-
-                if self.debug_points:
-                    sitk.WriteImage(zyx_bool, f"zyx_bool_{c_idx}.seg.nrrd")
-
-                # Calculate oriented bounding box using SimpleITK filter
-                obb_filter = sitk.LabelShapeStatisticsImageFilter()
-                obb_filter.ComputeOrientedBoundingBoxOn()
-                obb_filter.Execute(zyx_bool)
+                # clip to volume dimensions to avoid out of bounds errors
+                xyz[:, -1] = np.clip(xyz[:, -1], 0, z_bounds - 1)
 
                 # record obb filter for testing purposes
-                obb_filters_list.append(obb_filter)
+                xyz_groups.append(xyz)
 
-        return obb_filters_list
+        return xyz_groups
+
+    def _obb(
+        self,
+        c_idx: int,
+        iou_threshold: float,
+        z_iou_interval: int,
+        z_length_min: int,
+        xy_padding: int,
+        z_padding: int,
+    ) -> List[sitk.LabelShapeStatisticsImageFilter] | List:
+        """
+        Get oriented bounding boxes for the specified class index.
+
+        Args:
+            c_idx: Class index to get oriented bounding boxes for.
+            iou_threshold: IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+
+        Returns:
+            List of oriented bounding box filters for the specified class index.
+
+        """
+        obbs_list = []
+        xyz_groups = self._bounding_boxes_rotated(
+            c_idx, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
+        for xyz in xyz_groups:
+            # Create boolean image marking box vertices
+            zyx_bool = np.zeros(np.flip(self.vol.GetSize()))
+            zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
+            zyx_bool = sitk.GetImageFromArray(zyx_bool)
+            zyx_bool.CopyInformation(self.vol)
+            zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
+
+            if self.debug_points:
+                sitk.WriteImage(zyx_bool, f"zyx_bool_{c_idx}.seg.nrrd")
+
+            # Calculate oriented bounding box using SimpleITK filter
+            obb_filter = sitk.LabelShapeStatisticsImageFilter()
+            obb_filter.ComputeOrientedBoundingBoxOn()
+            obb_filter.Execute(zyx_bool)
+
+            # record obb filter for testing purposes
+            obbs_list.append(obb_filter)
+
+        return obbs_list
 
     def _align(
         self,
@@ -608,7 +719,9 @@ class OBBCrop2Bone:
         self._resamplers = []
         self.detection_means = []
         # Process all instances of the class and align volumes according to oriented bounding boxes
-        obb_filters_list = self._obb(c_idx, iou_threshold, z_iou_interval, z_length_min)
+        obb_filters_list = self._obb(
+            c_idx, iou_threshold, z_iou_interval, z_length_min, z_padding, xy_padding
+        )
 
         for obb_filter in obb_filters_list:
             # get mean of detection not obb
@@ -625,26 +738,8 @@ class OBBCrop2Bone:
                 int(ceil(obb_filter.GetOrientedBoundingBoxSize(1)[i] / obb_spacing[i]))
                 for i in range(3)
             ]
-            # along the long axis, add the z padding, and xy padding for the other 2
-            xy_padding_pix = xy_padding / obb_spacing[0]
-            z_padding_pix = z_padding / obb_spacing[2]
-            aligned_img_size = [
-                (
-                    int(aligned_img_size[i] + 2 * z_padding_pix)
-                    if aligned_img_size[i] == max(aligned_img_size)
-                    else int(aligned_img_size[i] + 2 * xy_padding_pix)
-                )
-                for i in range(3)
-            ]
-            # need to offset the origin by the padding
+
             obb_origin = obb_filter.GetOrientedBoundingBoxOrigin(1)
-            obb_centroid = obb_filter.GetCentroid(1)
-            offset_dir = np.sign(np.array(obb_origin) - np.array(obb_centroid))
-            origin_offset = offset_dir * [
-                z_padding if aligned_img_size[i] == max(aligned_img_size) else xy_padding
-                for i in range(3)
-            ]
-            new_origin = np.array(obb_origin) + origin_offset
 
             resampler.SetOutputDirection(aligned_img_dir)
             resampler.SetOutputOrigin(obb_origin)
@@ -652,7 +747,7 @@ class OBBCrop2Bone:
             resampler.SetSize(aligned_img_size)
             # resampler.SetOutputPixelType(sitk.sitkUInt8)
             resampler.SetInterpolator(self.interpolator)
-            resampler.SetDefaultPixelValue(-1024)
+            resampler.SetDefaultPixelValue(-1023)
             # record the resampler used for testing purposes
             self._resamplers.append(resampler)
             # get the aligned image, and its array
@@ -732,7 +827,7 @@ class OBBCrop2Bone:
         self,
         obb_spacing=[0.5, 0.5, 0.5],
         z_iou_threshold=0.20,
-        z_iou_interval=50,
+        z_iou_interval=70,
         z_length_min=70,
         xy_padding=0,
         z_padding=0,
@@ -830,17 +925,13 @@ if __name__ == "__main__":
     ct_path = "/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd"
 
     # test obb crop
-    obb_crop = OBBCrop2Bone(ct_path)
+    obb_crop = OBBCrop2Bone(ct_path, confidence_threshold=0.4, iou_supress_threshold=0.4)
     # print(obb_crop._class_dict)
-    for i, img in enumerate(obb_crop.humerus([0.5, 0.5, 0.5], 0.01, 150, 20, 10, 10)):
-        # print("obb")
-        # print(img.GetSize())
-        # print(img.GetOrigin())
-        # print(img.GetDirection())
-        # ct = sitk.ReadImage(ct_path)
-        # print("ct")
-        # print(ct.GetSize())
-        # print(ct.GetOrigin())
-        # print(ct.GetDirection())
-
+    for i, img in enumerate(
+        obb_crop.humerus(
+            [0.5, 0.5, 0.5],
+            xy_padding=20,
+            z_padding=20,
+        )
+    ):
         sitk.WriteImage(img, f"1606011L-{i}.nrrd")
