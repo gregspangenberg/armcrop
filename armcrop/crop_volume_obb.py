@@ -5,12 +5,7 @@ import pathlib
 from typing import Tuple, List, Dict
 from math import ceil
 from networkx.utils.union_find import UnionFind
-import huggingface_hub
-
 from armcrop.base_crop import BaseCrop
-
-# disable logging
-rt.set_default_logger_severity(3)
 
 
 def non_max_suppression_rotated(prediction, conf_thres, iou_thres) -> List[np.ndarray]:
@@ -431,27 +426,14 @@ class OBBCrop2Bone(BaseCrop):
         self.debug_points = False
         self.interpolator = sitk.sitkBSpline3
         if not debug_class:
-            self.vol, self._class_dict = self.predict(
+            self.vol, self._class_dict = self._predict(
                 volume, confidence_threshold, iou_supress_threshold
             )
         else:
             self.vol = sitk.ReadImage(str(volume))
             self._class_dict = {}
 
-    def _get_model(self) -> pathlib.Path:
-        """
-        Download the ML model from hugginface for inference
-
-        Returns:
-            model_path: Path to the ML model
-        """
-        model_path = huggingface_hub.hf_hub_download(
-            repo_id="gregspangenberg/armcrop",
-            filename="upperarm_yolo11_obb_6.onnx",
-        )
-        return pathlib.Path(model_path)
-
-    def predict(
+    def _predict(
         self, volume: str | pathlib.Path | sitk.Image, conf_thres, iou_thres
     ) -> Tuple[sitk.Image, Dict]:
         """
@@ -821,8 +803,11 @@ class OBBCrop2Bone(BaseCrop):
 
 
 if __name__ == "__main__":
+    import time
+
     ct_path = "/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd"
 
+    t0 = time.time()
     # test obb crop
     obb_crop = OBBCrop2Bone(ct_path, confidence_threshold=0.4, iou_supress_threshold=0.4)
     # print(obb_crop._class_dict)
@@ -834,3 +819,4 @@ if __name__ == "__main__":
         )
     ):
         sitk.WriteImage(img, f"test-obb-{i}.nrrd")
+    print(f"Time taken: {time.time() - t0:.2f} seconds")

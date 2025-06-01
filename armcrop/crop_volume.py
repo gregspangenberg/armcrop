@@ -6,9 +6,6 @@ from networkx.utils.union_find import UnionFind
 from typing import List
 
 import SimpleITK as sitk
-import onnxruntime as rt
-import time
-import huggingface_hub
 from armcrop.base_crop import BaseCrop
 
 
@@ -318,7 +315,7 @@ class Crop2Bone(BaseCrop):
         debug_class=False,
     ):
         if not debug_class:
-            self.vol, self._data = self.predict(
+            self.vol, self._data = self._predict(
                 volume,
                 confidence_threshold,
                 iou_supress_threshold,
@@ -330,15 +327,7 @@ class Crop2Bone(BaseCrop):
                 self.vol = sitk.ReadImage(str(volume))
             self._data = []
 
-    def _get_model(self) -> pathlib.Path:
-        model_path = huggingface_hub.hf_hub_download(
-            repo_id="gregspangenberg/armcrop",
-            filename="yolov9c_upperlimb.onnx",
-        )
-
-        return pathlib.Path(model_path)
-
-    def predict(
+    def _predict(
         self,
         volume_path,
         confidence_threshold=0.5,
@@ -389,15 +378,25 @@ class Crop2Bone(BaseCrop):
             discard_threshold,
         )
 
-    def _croppa(self, roi) -> list:
+    def _croppa(self, roi, output_spacing) -> list:
         crop_vols = []
         for r in roi:
+            resampler = sitk.ResampleImageFilter()
+            resampler.SetOutputDirection(self.vol.GetDirection())
+            resampler.SetOutputOrigin(r[1])
+            resampler.SetOutputSpacing(output_spacing)
+            resampler.SetSize(r[0])
+            resampler.SetOutputPixelType(self.vol.GetPixelIDValue())
+            resampler.SetDefaultPixelValue(-1023)
+            resampler.SetInterpolator(sitk.sitkLinear)
+            # Crop the volume using the RegionOfInterest filter
             vol_crop = sitk.RegionOfInterest(self.vol, r[0], r[1])
             crop_vols.append(vol_crop)
         return crop_vols
 
     def clavicle(
         self,
+        spacing=[0.5, 0.5, 0.5],
         z_padding=2,
         xy_padding=2,
         max_gap=15,
@@ -420,10 +419,11 @@ class Crop2Bone(BaseCrop):
         crop_dict = self._get_crop_dict(
             z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
         )
-        return self._croppa(crop_dict.get("clavicle", []))
+        return self._croppa(crop_dict.get("clavicle", []), output_spacing=spacing)
 
     def scapula(
         self,
+        spacing=[0.5, 0.5, 0.5],
         z_padding=2,
         xy_padding=2,
         max_gap=15,
@@ -446,10 +446,11 @@ class Crop2Bone(BaseCrop):
         crop_dict = self._get_crop_dict(
             z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
         )
-        return self._croppa(crop_dict.get("scapula", []))
+        return self._croppa(crop_dict.get("scapula", []), output_spacing=spacing)
 
     def humerus(
         self,
+        spacing=[0.5, 0.5, 0.5],
         z_padding=2,
         xy_padding=2,
         max_gap=15,
@@ -472,10 +473,11 @@ class Crop2Bone(BaseCrop):
         crop_dict = self._get_crop_dict(
             z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
         )
-        return self._croppa(crop_dict.get("humerus", []))
+        return self._croppa(crop_dict.get("humerus", []), output_spacing=spacing)
 
     def radius_ulna(
         self,
+        spacing=[0.5, 0.5, 0.5],
         z_padding=2,
         xy_padding=2,
         max_gap=15,
@@ -498,10 +500,11 @@ class Crop2Bone(BaseCrop):
         crop_dict = self._get_crop_dict(
             z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
         )
-        return self._croppa(crop_dict.get("radius_ulna", []))
+        return self._croppa(crop_dict.get("radius_ulna", []), output_spacing=spacing)
 
     def hand(
         self,
+        spacing=[0.5, 0.5, 0.5],
         z_padding=2,
         xy_padding=2,
         max_gap=15,
@@ -524,23 +527,22 @@ class Crop2Bone(BaseCrop):
         crop_dict = self._get_crop_dict(
             z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
         )
-        return self._croppa(crop_dict.get("hand", []))
+        return self._croppa(crop_dict.get("hand", []), output_spacing=spacing)
 
 
 if __name__ == "__main__":
+    import time
+
     t0 = time.time()
 
     volume_path = pathlib.Path("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
 
     # Use the updated interface
     croppa = Crop2Bone(volume_path, confidence_threshold=0.4, iou_supress_threshold=0.3)
-    print(f"Volume size: {sitk.ReadImage(str(volume_path)).GetSize()}")
-
     scapula_volumes = croppa.scapula(z_padding=2, xy_padding=2)
-    print(f"Found {len(scapula_volumes)} scapula volumes")
 
     for i, s in enumerate(scapula_volumes):
         print(f"Scapula {i} size: {s.GetSize()}")
         sitk.WriteImage(s, f"test-{i}.nrrd")
 
-    print(f"Elapsed time: {time.time()-t0}")
+    print(f"Time taken: {time.time() - t0:.2f} seconds")
