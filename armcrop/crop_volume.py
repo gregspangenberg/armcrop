@@ -283,10 +283,6 @@ def post_process_volume(
     return crop_classes
 
 
-def save_volume(vol, path):
-    sitk.WriteImage(vol, path, imageIO="NrrdImageIO")
-
-
 class Crop2Bone(BaseCrop):
     """
     Crops a bounding box volume to the bone of interest.
@@ -545,6 +541,6 @@ if __name__ == "__main__":
 
     for i, s in enumerate(scapula_volumes):
         print(f"Scapula {i} size: {s.GetSize()}")
-        save_volume(s, f"test-{i}.nrrd")
+        sitk.WriteImage(s, f"test-{i}.nrrd")
 
     print(f"Elapsed time: {time.time()-t0}")
