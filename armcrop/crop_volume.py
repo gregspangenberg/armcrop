@@ -2,23 +2,14 @@ import pathlib
 import numpy as np
 import math
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
 from typing import List
-from copy import deepcopy
 
 import SimpleITK as sitk
 import onnxruntime as rt
 import time
 import huggingface_hub
-
-
-def get_model():
-    model_path = huggingface_hub.hf_hub_download(
-        repo_id="gregspangenberg/armcrop",
-        filename="yolov9c_upperlimb.onnx",
-    )
-    return model_path
+from armcrop.base_crop import BaseCrop
 
 
 def i_within_x_mm(target_i, mm, spacing, start_i, stop_i):
@@ -179,109 +170,6 @@ def post_process_image(output, conf_threshold=0.5, iou_threshold=0.5):
     return boxes, scores, class_ids
 
 
-def load_volume(volume_path: pathlib.Path, img_size=(640, 640)):
-    vol = sitk.ReadImage(str(volume_path))
-    vol_t = deepcopy(vol)
-    # x and y axes were flipped during training so we need to permute the axes
-    # in the future we will fix this in the training pipeline
-    vol_t = sitk.PermuteAxes(vol_t, [1, 0, 2])
-    vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
-    vol_t = sitk.Clamp(vol_t, sitk.sitkFloat32, -1024, 3000)
-    vol_t = sitk.RescaleIntensity(vol_t, 0, 1)
-    new_size = [img_size[0], img_size[1], vol_t.GetDepth()]
-    reference_image = sitk.Image(new_size, vol_t.GetPixelIDValue())
-    reference_image.SetOrigin(vol_t.GetOrigin())
-    reference_image.SetDirection(vol_t.GetDirection())
-    reference_image.SetSpacing(
-        [sz * spc / nsz for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())]
-    )
-    vol_t = sitk.Resample(vol_t, reference_image)
-
-    return vol, vol_t
-
-
-def load_model(img_size):
-    # load model
-    with open(get_model(), "rb") as file:
-        # set order of providers to try
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        import torch
-
-        providers = [
-            (
-                "CUDAExecutionProvider",
-                {
-                    "device_id": torch.cuda.current_device(),
-                    "user_compute_stream": str(torch.cuda.current_stream().cuda_stream),
-                },
-            )
-        ]
-        model = rt.InferenceSession(file.read(), providers=providers)
-
-    # prime the model on a random image, to get the slow first inference out of the way
-    model.run(
-        None,
-        {"images": np.random.rand(1, 3, img_size[0], img_size[1]).astype(np.float32)},
-    )
-
-    return model
-
-
-def load(volume_path, img_size):
-    with ThreadPoolExecutor() as executor:
-        # Apply the tasks asynchronously
-        volume_result = executor.submit(load_volume, volume_path, img_size)
-        model_result = executor.submit(load_model, img_size)
-
-        # Wait for results
-        vol, vol_t = volume_result.result()
-        model = model_result.result()
-    return model, vol, vol_t
-
-
-def predict(
-    volume_path,
-    z_padding,
-    xy_padding,
-    max_gap,
-    iou_threshold,
-    discard_threshold,
-):
-    # load model and volume
-    img_size = (640, 640)
-    model, vol, vol_t = load(volume_path, img_size)
-
-    # loop over axial images and predict
-    data = []
-    for i_img in range(vol_t.GetDepth()):
-        # prepare the image for inference
-        arr = sitk.GetArrayFromImage(vol_t[:, :, i_img])
-        arr = np.expand_dims(arr, axis=0)
-        arr = np.expand_dims(arr, axis=0)
-        arr = np.repeat(arr, 3, axis=1)
-        arr = arr.astype(np.float32)
-
-        # run inference on the image
-        output = model.run(None, {"images": arr})
-        boxes, scores, labels = post_process_image(output, conf_threshold=0.4, iou_threshold=0.3)
-        # record the data
-        data.extend(list(zip(np.repeat(i_img, len(labels)), boxes, scores, labels)))
-
-    # get the dict of crop of the bounding volume, from the predicted boxes on each axial slice
-    crop_dict = post_process_volume(
-        data,
-        vol,
-        img_size,
-        z_padding,
-        xy_padding,
-        max_gap,
-        iou_threshold,
-        discard_threshold,
-    )
-
-    return vol, crop_dict
-
-
 def post_process_volume(
     data,
     vol: sitk.Image,
@@ -349,7 +237,7 @@ def post_process_volume(
 
             dff = df.loc[s]
             xmin, ymin, xmax, ymax = (
-                np.vstack(dff[1].values) / img_size[0] * float(vol.GetWidth())
+                np.vstack(list(dff[1].values)) / img_size[0] * float(vol.GetWidth())
             ).T
             # get the bounds of the region of interest
             bounds = [
@@ -399,21 +287,17 @@ def save_volume(vol, path):
     sitk.WriteImage(vol, path, imageIO="NrrdImageIO")
 
 
-class Crop2Bone:
+class Crop2Bone(BaseCrop):
     """
     Crops a bounding box volume to the bone of interest.
 
-    Attributes:
-        z_padding (int): Padding in the z-dimension.
-        xy_padding (int): Padding in the x and y dimensions.
-        max_gap (int): Maximum gap allowed.
-        iou_threshold (float): Intersection over Union threshold.
-        discard_threshold (int): Threshold for discarding small regions.
+    Args:
+        volume (str | pathlib.Path | sitk.Image): Path to the input volume for inference, or an sitk.Image object
+        confidence_threshold (float): The confidence threshold below which boxes will be filtered out. Valid values are between 0.0 and 1.0. Defaults to 0.5.
+        iou_supress_threshold (float): The IoU threshold above which boxes will be considered duplicates and filtered out during NMS. Valid values are between 0.0 and 1.0. Defaults to 0.4.
+        debug_class (bool): If True, will only load the volume without making predictions. Defaults to False.
 
     Methods:
-        __call__(volume_path):
-            Predicts and crops the volume based on the provided parameters.
-
         clavicle() -> List[sitk.Image]:
             Returns the cropped volume for the clavicle.
 
@@ -432,28 +316,82 @@ class Crop2Bone:
 
     def __init__(
         self,
+        volume: str | pathlib.Path | sitk.Image,
+        confidence_threshold=0.5,
+        iou_supress_threshold=0.4,
+        debug_class=False,
+    ):
+        if not debug_class:
+            self.vol, self._data = self.predict(
+                volume,
+                confidence_threshold,
+                iou_supress_threshold,
+            )
+        else:
+            if isinstance(volume, sitk.Image):
+                self.vol = volume
+            else:
+                self.vol = sitk.ReadImage(str(volume))
+            self._data = []
+
+    def _get_model(self) -> pathlib.Path:
+        model_path = huggingface_hub.hf_hub_download(
+            repo_id="gregspangenberg/armcrop",
+            filename="yolov9c_upperlimb.onnx",
+        )
+
+        return pathlib.Path(model_path)
+
+    def predict(
+        self,
+        volume_path,
+        confidence_threshold=0.5,
+        iou_supress_threshold=0.4,
+    ):
+        # load model and volume
+        img_size = (640, 640)
+        model, vol, vol_t = self.load(volume_path, img_size)
+
+        # loop over axial images and predict
+        data = []
+        for i_img in range(vol_t.GetDepth()):
+            # prepare the image for inference
+            arr = sitk.GetArrayFromImage(vol_t[:, :, i_img])
+            arr = np.expand_dims(arr, axis=0)
+            arr = np.expand_dims(arr, axis=0)
+            arr = np.repeat(arr, 3, axis=1)
+            arr = arr.astype(np.float32)
+
+            # run inference on the image
+            output = model.run(None, {"images": arr})
+            boxes, scores, labels = post_process_image(
+                output, conf_threshold=confidence_threshold, iou_threshold=iou_supress_threshold
+            )
+            # record the data
+            data.extend(list(zip(np.repeat(i_img, len(labels)), boxes, scores, labels)))
+
+        return vol, data
+
+    def _get_crop_dict(
+        self,
         z_padding=2,
         xy_padding=2,
         max_gap=15,
         iou_threshold=0.1,
         discard_threshold=30,
     ):
-        self.z_padding = z_padding
-        self.xy_padding = xy_padding
-        self.max_gap = max_gap
-        self.iou_threshold = iou_threshold
-        self.discard_threshold = discard_threshold
-
-    def __call__(self, volume_path):
-        self.vol, self._crop_dict = predict(
-            volume_path,
-            self.z_padding,
-            self.xy_padding,
-            self.max_gap,
-            self.iou_threshold,
-            self.discard_threshold,
+        """Generate crop dictionary with given parameters"""
+        img_size = (640, 640)
+        return post_process_volume(
+            self._data,
+            self.vol,
+            img_size,
+            z_padding,
+            xy_padding,
+            max_gap,
+            iou_threshold,
+            discard_threshold,
         )
-        return self
 
     def _croppa(self, roi) -> list:
         crop_vols = []
@@ -462,68 +400,151 @@ class Crop2Bone:
             crop_vols.append(vol_crop)
         return crop_vols
 
+    def clavicle(
+        self,
+        z_padding=2,
+        xy_padding=2,
+        max_gap=15,
+        iou_threshold=0.1,
+        discard_threshold=30,
+    ) -> List[sitk.Image]:
+        """
+        Extracts and crops the clavicle region from the CT volume.
 
-def clavicle(self) -> List[sitk.Image]:
-    """
-    Extracts and crops the clavicle region from the CT volume.
+        Args:
+            z_padding (int): Padding in the z-dimension in mm. Defaults to 2.
+            xy_padding (int): Padding in the x and y dimensions in mm. Defaults to 2.
+            max_gap (int): Maximum gap allowed between slices in mm. Defaults to 15.
+            iou_threshold (float): Intersection over Union threshold for object detection. Defaults to 0.1.
+            discard_threshold (int): Threshold for discarding small regions in mm. Defaults to 30.
 
-    Returns:
-        List[sitk.Image]: List of cropped volumes containing detected clavicles
-    """
-    return self._croppa(self._crop_dict["clavicle"])
+        Returns:
+            List[sitk.Image]: List of cropped volumes containing detected clavicles
+        """
+        crop_dict = self._get_crop_dict(
+            z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
+        )
+        return self._croppa(crop_dict.get("clavicle", []))
 
+    def scapula(
+        self,
+        z_padding=2,
+        xy_padding=2,
+        max_gap=15,
+        iou_threshold=0.1,
+        discard_threshold=30,
+    ) -> List[sitk.Image]:
+        """
+        Extracts and crops the scapula region from the CT volume.
 
-def scapula(self) -> List[sitk.Image]:
-    """
-    Extracts and crops the scapula region from the CT volume.
+        Args:
+            z_padding (int): Padding in the z-dimension in mm. Defaults to 2.
+            xy_padding (int): Padding in the x and y dimensions in mm. Defaults to 2.
+            max_gap (int): Maximum gap allowed between slices in mm. Defaults to 15.
+            iou_threshold (float): Intersection over Union threshold for object detection. Defaults to 0.1.
+            discard_threshold (int): Threshold for discarding small regions in mm. Defaults to 30.
 
-    Returns:
-        List[sitk.Image]: List of cropped volumes containing detected scapulae
-    """
-    return self._croppa(self._crop_dict["scapula"])
+        Returns:
+            List[sitk.Image]: List of cropped volumes containing detected scapulae
+        """
+        crop_dict = self._get_crop_dict(
+            z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
+        )
+        return self._croppa(crop_dict.get("scapula", []))
 
+    def humerus(
+        self,
+        z_padding=2,
+        xy_padding=2,
+        max_gap=15,
+        iou_threshold=0.1,
+        discard_threshold=30,
+    ) -> List[sitk.Image]:
+        """
+        Extracts and crops the humerus region from the CT volume.
 
-def humerus(self) -> List[sitk.Image]:
-    """
-    Extracts and crops the humerus region from the CT volume.
+        Args:
+            z_padding (int): Padding in the z-dimension in mm. Defaults to 2.
+            xy_padding (int): Padding in the x and y dimensions in mm. Defaults to 2.
+            max_gap (int): Maximum gap allowed between slices in mm. Defaults to 15.
+            iou_threshold (float): Intersection over Union threshold for object detection. Defaults to 0.1.
+            discard_threshold (int): Threshold for discarding small regions in mm. Defaults to 30.
 
-    Returns:
-        List[sitk.Image]: List of cropped volumes containing detected humeri
-    """
-    return self._croppa(self._crop_dict["humerus"])
+        Returns:
+            List[sitk.Image]: List of cropped volumes containing detected humeri
+        """
+        crop_dict = self._get_crop_dict(
+            z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
+        )
+        return self._croppa(crop_dict.get("humerus", []))
 
+    def radius_ulna(
+        self,
+        z_padding=2,
+        xy_padding=2,
+        max_gap=15,
+        iou_threshold=0.1,
+        discard_threshold=30,
+    ) -> List[sitk.Image]:
+        """
+        Extracts and crops the radius and ulna regions from the CT volume.
 
-def radius_ulna(self) -> List[sitk.Image]:
-    """
-    Extracts and crops the radius and ulna regions from the CT volume.
+        Args:
+            z_padding (int): Padding in the z-dimension in mm. Defaults to 2.
+            xy_padding (int): Padding in the x and y dimensions in mm. Defaults to 2.
+            max_gap (int): Maximum gap allowed between slices in mm. Defaults to 15.
+            iou_threshold (float): Intersection over Union threshold for object detection. Defaults to 0.1.
+            discard_threshold (int): Threshold for discarding small regions in mm. Defaults to 30.
 
-    Returns:
-        List[sitk.Image]: List of cropped volumes containing detected radius/ulna pairs
-    """
-    return self._croppa(self._crop_dict["radius_ulna"])
+        Returns:
+            List[sitk.Image]: List of cropped volumes containing detected radius/ulna pairs
+        """
+        crop_dict = self._get_crop_dict(
+            z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
+        )
+        return self._croppa(crop_dict.get("radius_ulna", []))
 
+    def hand(
+        self,
+        z_padding=2,
+        xy_padding=2,
+        max_gap=15,
+        iou_threshold=0.1,
+        discard_threshold=30,
+    ) -> List[sitk.Image]:
+        """
+        Extracts and crops the hand region from the CT volume.
 
-def hand(self) -> List[sitk.Image]:
-    """
-    Extracts and crops the hand region from the CT volume.
+        Args:
+            z_padding (int): Padding in the z-dimension in mm. Defaults to 2.
+            xy_padding (int): Padding in the x and y dimensions in mm. Defaults to 2.
+            max_gap (int): Maximum gap allowed between slices in mm. Defaults to 15.
+            iou_threshold (float): Intersection over Union threshold for object detection. Defaults to 0.1.
+            discard_threshold (int): Threshold for discarding small regions in mm. Defaults to 30.
 
-    Returns:
-        List[sitk.Image]: List of cropped volumes containing detected hands
-    """
-    return self._croppa(self._crop_dict["hand"])
+        Returns:
+            List[sitk.Image]: List of cropped volumes containing detected hands
+        """
+        crop_dict = self._get_crop_dict(
+            z_padding, xy_padding, max_gap, iou_threshold, discard_threshold
+        )
+        return self._croppa(crop_dict.get("hand", []))
 
 
 if __name__ == "__main__":
     t0 = time.time()
 
-    volume_path = pathlib.Path("/mnt/slowdata/cadaveric-full-arm/S202048/S202048.nrrd")
+    volume_path = pathlib.Path("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
 
-    croppa = Crop2Bone()
-    croppa(volume_path)
-    print(croppa._crop_dict)
-    print(sitk.ReadImage(volume_path).GetSize())
-    for i in range(len(croppa.scapula())):
-        s = croppa.scapula()[i]
-        print(croppa.scapula()[i].GetSize())
-        save_volume(s, f"S202048-{i}.nrrd")
+    # Use the updated interface
+    croppa = Crop2Bone(volume_path, confidence_threshold=0.4, iou_supress_threshold=0.3)
+    print(f"Volume size: {sitk.ReadImage(str(volume_path)).GetSize()}")
+
+    scapula_volumes = croppa.scapula(z_padding=2, xy_padding=2)
+    print(f"Found {len(scapula_volumes)} scapula volumes")
+
+    for i, s in enumerate(scapula_volumes):
+        print(f"Scapula {i} size: {s.GetSize()}")
+        save_volume(s, f"test-{i}.nrrd")
+
     print(f"Elapsed time: {time.time()-t0}")

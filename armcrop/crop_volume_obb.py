@@ -4,126 +4,13 @@ import numpy as np
 import pathlib
 from typing import Tuple, List, Dict
 from math import ceil
-from copy import deepcopy
-from concurrent.futures import ThreadPoolExecutor
 from networkx.utils.union_find import UnionFind
 import huggingface_hub
 
+from armcrop.base_crop import BaseCrop
+
 # disable logging
 rt.set_default_logger_severity(3)
-
-
-def get_model() -> str:
-    """
-    Download the ML model from hugginface for inference
-
-    Returns:
-        model_path: Path to the ML model
-    """
-    model_path = huggingface_hub.hf_hub_download(
-        repo_id="gregspangenberg/armcrop",
-        filename="upperarm_yolo11_obb_6.onnx",
-    )
-    return model_path
-
-
-def load_model(img_size) -> rt.InferenceSession:
-    """
-    Load the ML model for inference
-
-    Args:
-        img_size: Image size required for the ML model
-
-    Returns:
-        model: The ML model for inference
-    """
-    # load model
-    with open(get_model(), "rb") as file:
-        try:
-            import torch
-
-            providers = [
-                (
-                    "CUDAExecutionProvider",
-                    {
-                        "device_id": torch.cuda.current_device(),
-                        "user_compute_stream": str(torch.cuda.current_stream().cuda_stream),
-                    },
-                )
-            ]
-        except:
-            print("Using CPUExecutionProvider")
-            providers = ["CPUExecutionProvider"]
-        model = rt.InferenceSession(file.read(), providers=providers)
-
-    # prime the model on a random image, to get the slow first inference out of the way
-    model.run(
-        None,
-        {"images": np.random.rand(1, 3, img_size[0], img_size[1]).astype(np.float32)},
-    )
-
-    return model
-
-
-def load_volume(
-    volume: pathlib.Path | sitk.Image, img_size=(640, 640)
-) -> Tuple[sitk.Image, sitk.Image]:
-    """
-    Load a volume and preprcoess it for inference
-
-    Args:
-        volume: Path to the input volume for inference, or the sitk.Image volume
-        img_size: Image size required for the ML model. Defaults to (640, 640).
-
-    Returns:
-        vol: The original volume
-        vol_t: The preprocessed volume
-    """
-    if isinstance(volume, sitk.Image):
-        vol = volume
-    else:
-        vol = sitk.ReadImage(str(volume))
-    vol_t = deepcopy(vol)
-    vol_t = sitk.Cast(vol_t, sitk.sitkFloat32)
-    vol_t = sitk.Clamp(vol_t, sitk.sitkFloat32, -1024, 3000)
-    vol_t = sitk.RescaleIntensity(vol_t, 0, 1)
-
-    new_size = [img_size[0], img_size[1], vol_t.GetDepth()]
-
-    reference_image = sitk.Image(new_size, vol_t.GetPixelIDValue())
-    reference_image.SetOrigin(vol_t.GetOrigin())
-    reference_image.SetDirection(vol_t.GetDirection())
-    reference_image.SetSpacing(
-        [sz * spc / nsz for nsz, sz, spc in zip(new_size, vol_t.GetSize(), vol_t.GetSpacing())]
-    )
-
-    vol_t = sitk.Resample(vol_t, reference_image)
-
-    return vol, vol_t
-
-
-def load(volume, img_size) -> Tuple[rt.InferenceSession, sitk.Image, sitk.Image]:
-    """
-    Load the ML model and the volume for inference
-
-    Args:
-        volume: path to the volume for inference, or an sitk.Image object
-        img_size: pixel size required for the ML model
-
-    Returns:
-        model: The ML model for inference
-        vol: The original volume
-        vol_t: The preprocessed volume
-    """
-    with ThreadPoolExecutor() as executor:
-        # Apply the tasks asynchronously
-        volume_result = executor.submit(load_volume, volume, img_size)
-        model_result = executor.submit(load_model, img_size)
-
-        # Wait for results
-        vol, vol_t = volume_result.result()
-        model = model_result.result()
-    return model, vol, vol_t
 
 
 def non_max_suppression_rotated(prediction, conf_thres, iou_thres) -> List[np.ndarray]:
@@ -506,48 +393,7 @@ def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_lengt
     return ds_sets
 
 
-def predict(
-    volume: str | pathlib.Path | sitk.Image, conf_thres, iou_thres
-) -> Tuple[sitk.Image, Dict]:
-    """
-    Predict the oriented bounding boxes for each class in the input volume
-
-    Args:
-        volume: Path to the input volume for inference, or the sitk.Image object
-
-    Returns:
-        vol: The original volume
-        aligned_vol_dict: Dictionary with keys for each class containing a list of sitk.Image 's for each detected object in the class
-    """
-    # Initialize model with specified image dimensions and load volume
-    img_size = (640, 640)
-    model, vol, vol_t = load(volume, img_size)
-
-    # Process each axial slice for prediction
-    data = []
-    for z in range(vol_t.GetDepth()):
-        # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
-        arr = sitk.GetArrayFromImage(vol_t[:, :, z])
-        arr = np.expand_dims(arr, axis=0)
-        arr = np.expand_dims(arr, axis=0)
-        arr = np.repeat(arr, 3, axis=1)
-        arr = arr.astype(np.float32)
-
-        # run inference on the image
-        output = model.run(None, {"images": arr})
-        # perform non-max supression on the output
-        preds = non_max_suppression_rotated(output[0], conf_thres, iou_thres)[0]
-        # add the z coordinate to the predictions
-        preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
-        data.extend(preds)
-
-    # organize predictions by class
-    cls_dict = class_dict_construct(np.array(data))
-
-    return vol, cls_dict
-
-
-class OBBCrop2Bone:
+class OBBCrop2Bone(BaseCrop):
     """
     Aligns oriented bounding box volumes to bones in the input volume
 
@@ -585,12 +431,65 @@ class OBBCrop2Bone:
         self.debug_points = False
         self.interpolator = sitk.sitkBSpline3
         if not debug_class:
-            self.vol, self._class_dict = predict(
+            self.vol, self._class_dict = self.predict(
                 volume, confidence_threshold, iou_supress_threshold
             )
         else:
             self.vol = sitk.ReadImage(str(volume))
             self._class_dict = {}
+
+    def _get_model(self) -> pathlib.Path:
+        """
+        Download the ML model from hugginface for inference
+
+        Returns:
+            model_path: Path to the ML model
+        """
+        model_path = huggingface_hub.hf_hub_download(
+            repo_id="gregspangenberg/armcrop",
+            filename="upperarm_yolo11_obb_6.onnx",
+        )
+        return pathlib.Path(model_path)
+
+    def predict(
+        self, volume: str | pathlib.Path | sitk.Image, conf_thres, iou_thres
+    ) -> Tuple[sitk.Image, Dict]:
+        """
+        Predict the oriented bounding boxes for each class in the input volume
+
+        Args:
+            volume: Path to the input volume for inference, or the sitk.Image object
+
+        Returns:
+            vol: The original volume
+            aligned_vol_dict: Dictionary with keys for each class containing a list of sitk.Image 's for each detected object in the class
+        """
+        # Initialize model with specified image dimensions and load volume
+        img_size = (640, 640)
+        model, vol, vol_t = self.load(volume, img_size)
+
+        # Process each axial slice for prediction
+        data = []
+        for z in range(vol_t.GetDepth()):
+            # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
+            arr = sitk.GetArrayFromImage(vol_t[:, :, z])
+            arr = np.expand_dims(arr, axis=0)
+            arr = np.expand_dims(arr, axis=0)
+            arr = np.repeat(arr, 3, axis=1)
+            arr = arr.astype(np.float32)
+
+            # run inference on the image
+            output = model.run(None, {"images": arr})
+            # perform non-max supression on the output
+            preds = non_max_suppression_rotated(output[0], conf_thres, iou_thres)[0]
+            # add the z coordinate to the predictions
+            preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
+            data.extend(preds)
+
+        # organize predictions by class
+        cls_dict = class_dict_construct(np.array(data))
+
+        return vol, cls_dict
 
     def _bounding_boxes_rotated(
         self,
@@ -738,7 +637,7 @@ class OBBCrop2Bone:
                 int(ceil(obb_filter.GetOrientedBoundingBoxSize(1)[i] / obb_spacing[i]))
                 for i in range(3)
             ]
-
+            # set origin for the aligned image
             obb_origin = obb_filter.GetOrientedBoundingBoxOrigin(1)
 
             resampler.SetOutputDirection(aligned_img_dir)
@@ -934,4 +833,4 @@ if __name__ == "__main__":
             z_padding=20,
         )
     ):
-        sitk.WriteImage(img, f"1606011L-{i}.nrrd")
+        sitk.WriteImage(img, f"test-obb-{i}.nrrd")
