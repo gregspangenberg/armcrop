@@ -96,31 +96,6 @@ class Detector(abc.ABC):
 
         return arr
 
-    def predict(
-        self, volume: pathlib.Path | sitk.Image, conf_thres, iou_thres
-    ) -> Dict[int, np.ndarray]:
-        """
-        Run inference on the volume and return the cropped volume.
-
-        Args:
-            volume: The input volume for inference.
-            conf_thres: Confidence threshold for predictions.
-            iou_thres: IoU threshold for non-max suppression.
-
-        Returns:
-            A dictionary with class indices as keys and numpy arrays of predictions as values.
-        """
-        raise NotImplementedError("This method should be implemented by subclasses.")
-
-
-class OBBDetector(Detector):
-    """
-    Detector for cropping volumes using an Oriented Bounding Box (OBB) model.
-    """
-
-    def __init__(self, img_size=(640, 640)):
-        super().__init__(img_size, model_type="obb")
-
     def _class_dict_construct(self, data) -> Dict:
         """
         Creates the dictionary with the data for each class
@@ -147,6 +122,31 @@ class OBBDetector(Detector):
             class_data[int(cls)] = cls_data
 
         return class_data
+
+    def predict(
+        self, volume: pathlib.Path | sitk.Image, conf_thres, iou_thres
+    ) -> Dict[int, np.ndarray]:
+        """
+        Run inference on the volume and return the cropped volume.
+
+        Args:
+            volume: The input volume for inference.
+            conf_thres: Confidence threshold for predictions.
+            iou_thres: IoU threshold for non-max suppression.
+
+        Returns:
+            A dictionary with class indices as keys and numpy arrays of predictions as values.
+        """
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+
+class OBBDetector(Detector):
+    """
+    Detector for cropping volumes using an Oriented Bounding Box (OBB) model.
+    """
+
+    def __init__(self, img_size=(640, 640)):
+        super().__init__(img_size, model_type="obb")
 
     def nms_rotated_batch(self, prediction, conf_thres, iou_thres) -> List[np.ndarray]:
         """
@@ -302,7 +302,6 @@ class OBBDetector(Detector):
             (np.ndarray): Covariance matrices corresponding to original rotated bounding boxes.
         """
         # Gaussian bounding boxes, ignore the center points (the first two columns) because they are not needed here.
-        # gbbs = torch.cat((boxes[:, 2:4].pow(2) / 12, boxes[:, 4:]), dim=-1)
         gbbs = np.concatenate((np.power(boxes[:, 2:4], 2) / 12, boxes[:, 4:5]), axis=-1)
         a, b, c = np.split(gbbs, 3, axis=-1)
         cos = np.cos(c)
@@ -330,15 +329,14 @@ class OBBDetector(Detector):
 
         # Process each axial slice for prediction
         data = []
-
         for z in range(vol_t.GetDepth()):
             # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
             arr = sitk.GetArrayFromImage(vol_t[:, :, z])
             arr = self._preprocess_array(arr)
             # run inference on the image
-            output = model.run(None, {"images": arr})
+            output = model.run(None, {"images": arr})[0]
             # perform non-max supression on the output
-            preds = self.nms_rotated_batch(output[0], conf_thres, iou_thres)[0]
+            preds = self.nms_rotated_batch(output, conf_thres, iou_thres)[0]
             # add the z coordinate to the predictions
             preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
             data.extend(preds)
@@ -359,6 +357,128 @@ class BBDetector(Detector):
     def __init__(self, img_size=(640, 640)):
         super().__init__(img_size, model_type="default")
 
+    def _compute_iou(self, box, boxes):
+        # Compute xmin, ymin, xmax, ymax for both boxes
+        xmin = np.maximum(box[0], boxes[:, 0])
+        ymin = np.maximum(box[1], boxes[:, 1])
+        xmax = np.minimum(box[2], boxes[:, 2])
+        ymax = np.minimum(box[3], boxes[:, 3])
+
+        # Compute intersection area
+        intersection_area = np.maximum(0, xmax - xmin) * np.maximum(0, ymax - ymin)
+
+        # Compute union area
+        box_area = (box[2] - box[0]) * (box[3] - box[1])
+        boxes_area = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        union_area = box_area + boxes_area - intersection_area
+        # Compute IoU
+        iou = intersection_area / union_area
+
+        return iou
+
+    def _xywh2xyxy(self, x):
+        # Convert bounding box (x, y, w, h) to bounding box (x1, y1, x2, y2)
+        y = np.copy(x)
+        y[..., 0] = x[..., 0] - x[..., 2] / 2
+        y[..., 1] = x[..., 1] - x[..., 3] / 2
+        y[..., 2] = x[..., 0] + x[..., 2] / 2
+        y[..., 3] = x[..., 1] + x[..., 3] / 2
+        return y
+
+    def _extract_boxes(self, predictions):
+
+        # Extract boxes from predictions
+        boxes = predictions[:, :4]
+
+        # Scale boxes to original image dimensions
+        # boxes = rescale_boxes(boxes)
+
+        # Convert boxes to xyxy format
+        boxes = self._xywh2xyxy(boxes)
+
+        return boxes
+
+    def _nms(self, boxes, scores, iou_threshold):
+        # Sort by score
+        sorted_indices = np.argsort(scores)[::-1]
+
+        keep_boxes = []
+        while sorted_indices.size > 0:
+            # Pick the last box
+            box_id = sorted_indices[0]
+            keep_boxes.append(box_id)
+
+            # Compute IoU of the picked box with the rest
+            ious = self._compute_iou(boxes[box_id, :], boxes[sorted_indices[1:], :])
+
+            # Remove boxes with IoU over the threshold
+            keep_indices = np.where(ious < iou_threshold)[0]
+
+            # print(keep_indices.shape, sorted_indices.shape)
+            sorted_indices = sorted_indices[keep_indices + 1]
+
+        return keep_boxes
+
+    def _multiclass_nms(self, boxes, scores, class_ids, iou_threshold):
+
+        unique_class_ids = np.unique(class_ids)
+
+        keep_boxes = []
+        for class_id in unique_class_ids:
+            class_indices = np.where(class_ids == class_id)[0]
+            class_boxes = boxes[class_indices, :]
+            class_scores = scores[class_indices]
+
+            class_keep_boxes = self._nms(class_boxes, class_scores, iou_threshold)
+            keep_boxes.extend(class_indices[class_keep_boxes])
+
+        return keep_boxes
+
+    def _unique_encompassing_boxes(self, boxes, scores, class_ids, indices, iou_threshold=0.1):
+        # iterate over the nms boxes
+        encompassing_boxes = []
+        for b_nms, s_nms, c_nms in zip(boxes[indices], scores[indices], class_ids[indices]):
+            # compute iou for the nms box with all other boxes in class
+            boxes_class = boxes[np.where(class_ids == c_nms)[0], :]
+            ious = self._compute_iou(b_nms, boxes_class)
+            iou_indicies = np.where(ious > iou_threshold)[0]
+            boxes_intersect = boxes_class[iou_indicies, :]
+            # construct biggest box that encompasses all intersecting boxes
+            x1 = np.min(boxes_intersect[:, 0])
+            y1 = np.min(boxes_intersect[:, 1])
+            x2 = np.max(boxes_intersect[:, 2])
+            y2 = np.max(boxes_intersect[:, 3])
+            encompassing_boxes.append(np.array([x1, y1, x2, y2]))
+
+        encompassing_boxes = np.vstack(encompassing_boxes)
+        return encompassing_boxes, scores[indices], class_ids[indices]
+
+    def post_process_image(self, output, conf_threshold=0.5, iou_threshold=0.5):
+        predictions = np.squeeze(output[0]).T
+
+        # Filter out object confidence scores below threshold
+        scores = np.max(predictions[:, 4:], axis=1)
+        predictions = predictions[scores > conf_threshold, :]
+        scores = scores[scores > conf_threshold]
+
+        if len(scores) == 0:
+            return [], [], []
+
+        # Get the class with the highest confidence
+        class_ids = np.argmax(predictions[:, 4:], axis=1)
+
+        # Get bounding boxes for each object
+        boxes = self._extract_boxes(predictions)
+
+        # Apply non-maxima suppression to suppress weak, overlapping bounding boxes
+        indices = self._multiclass_nms(boxes, scores, class_ids, iou_threshold)
+
+        boxes, scores, class_ids = self._unique_encompassing_boxes(
+            boxes, scores, class_ids, indices
+        )
+
+        return boxes, scores, class_ids
+
     def predict(
         self, volume: pathlib.Path | sitk.Image, conf_thres, iou_thres
     ) -> Dict[int, np.ndarray]:
@@ -378,7 +498,6 @@ class BBDetector(Detector):
 
         # Process each axial slice for prediction
         data = []
-
         for z in range(vol_t.GetDepth()):
             # Prepare the 2D slice for model inference by expanding dimensions and repeating channels
             arr = sitk.GetArrayFromImage(vol_t[:, :, z])
@@ -387,11 +506,10 @@ class BBDetector(Detector):
             # run inference on the image
             output = model.run(None, {"images": arr})
             # perform non-max supression on the output
-            preds = self.nms_rotated_batch(output[0], conf_thres, iou_thres)[0]
+            preds = self.post_process_image(output, conf_thres, iou_thres)
             # add the z coordinate to the predictions
-            preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
+            preds = np.c_[preds[0], preds[1], preds[2], np.ones((preds[0].shape[0], 1)) * z]
             data.extend(preds)
-
         # organize predictions by class
         cls_dict = self._class_dict_construct(np.array(data))
 
