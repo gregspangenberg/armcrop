@@ -335,6 +335,7 @@ class OBBDetector(Detector):
             arr = self._preprocess_array(arr)
             # run inference on the image
             output = model.run(None, {"images": arr})[0]
+            print(f"Output shape: {output.shape}")
             # perform non-max supression on the output
             preds = self.nms_rotated_batch(output, conf_thres, iou_thres)[0]
             # add the z coordinate to the predictions
@@ -453,7 +454,7 @@ class BBDetector(Detector):
         encompassing_boxes = np.vstack(encompassing_boxes)
         return encompassing_boxes, scores[indices], class_ids[indices]
 
-    def post_process_image(self, output, conf_threshold=0.5, iou_threshold=0.5):
+    def _post_process_image(self, output, conf_threshold=0.5, iou_threshold=0.5):
         predictions = np.squeeze(output[0]).T
 
         # Filter out object confidence scores below threshold
@@ -504,13 +505,29 @@ class BBDetector(Detector):
             arr = self._preprocess_array(arr)
 
             # run inference on the image
-            output = model.run(None, {"images": arr})
+            output = model.run(None, {"images": arr})[0]
+            print(f"Output shape: {output.shape}")
+
             # perform non-max supression on the output
-            preds = self.post_process_image(output, conf_thres, iou_thres)
+            preds = self._post_process_image(output, conf_thres, iou_thres)
+            print(preds)
             # add the z coordinate to the predictions
-            preds = np.c_[preds[0], preds[1], preds[2], np.ones((preds[0].shape[0], 1)) * z]
+            preds = np.c_[preds[0], preds[1], preds[2], np.ones((len(preds[0]), 1)) * z]
             data.extend(preds)
         # organize predictions by class
         cls_dict = self._class_dict_construct(np.array(data))
 
         return cls_dict
+
+
+if __name__ == "__main__":
+    # Example usage
+    detector = BBDetector()
+    volume_path = pathlib.Path("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
+    conf_threshold = 0.5
+    iou_threshold = 0.5
+
+    predictions = detector.predict(volume_path, conf_threshold, iou_threshold)
+    for cls, preds in predictions.items():
+        print(f"Class {cls}: {preds.shape[0]} predictions")
+        print(preds.shape)
