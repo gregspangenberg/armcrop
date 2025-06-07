@@ -335,7 +335,7 @@ class OBBDetector(Detector):
             arr = self._preprocess_array(arr)
             # run inference on the image
             output = model.run(None, {"images": arr})[0]
-            print(f"Output shape: {output.shape}")
+
             # perform non-max supression on the output
             preds = self.nms_rotated_batch(output, conf_thres, iou_thres)[0]
             # add the z coordinate to the predictions
@@ -414,8 +414,6 @@ class BBDetector(Detector):
 
             # Remove boxes with IoU over the threshold
             keep_indices = np.where(ious < iou_threshold)[0]
-
-            # print(keep_indices.shape, sorted_indices.shape)
             sorted_indices = sorted_indices[keep_indices + 1]
 
         return keep_boxes
@@ -506,11 +504,9 @@ class BBDetector(Detector):
 
             # run inference on the image
             output = model.run(None, {"images": arr})[0]
-            print(f"Output shape: {output.shape}")
 
             # perform non-max supression on the output
             preds = self._post_process_image(output, conf_thres, iou_thres)
-            print(preds)
             # add the z coordinate to the predictions
             preds = np.c_[preds[0], preds[1], preds[2], np.ones((len(preds[0]), 1)) * z]
             data.extend(preds)
@@ -522,7 +518,7 @@ class BBDetector(Detector):
 
 if __name__ == "__main__":
     # Example usage
-    detector = BBDetector()
+    detector = OBBDetector()
     volume_path = pathlib.Path("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
     conf_threshold = 0.5
     iou_threshold = 0.5
