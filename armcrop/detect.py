@@ -189,8 +189,8 @@ class OBBDetector(Detector):
             if not x.shape[0]:
                 continue
 
-            # Detections matrix nx6 (xyxy, conf, cls)
-            box = x[:, :4]  # xyxy
+            # Detections matrix nx6 (xywh, conf, cls, rot)
+            box = x[:, :4]  # xywh
             cls = x[:, 4:mi]  # classes
             rot = x[:, mi : mi + 1]  # rotation
             conf = np.max(cls, axis=1, keepdims=True)
@@ -343,6 +343,8 @@ class OBBDetector(Detector):
             data.extend(preds)
 
         # organize predictions by class
+        # output is xywhr, confidence, class_id, z
+        # xywh is for the 640 format image
         cls_dict = self._class_dict_construct(np.array(data))
 
         return cls_dict
@@ -511,6 +513,8 @@ class BBDetector(Detector):
             preds = np.c_[preds[0], preds[1], preds[2], np.ones((len(preds[0]), 1)) * z]
             data.extend(preds)
         # organize predictions by class
+        # output is xyxy, confidence, class_id, z
+        # xyxy is in the format (x1, y1, x2, y2), and out of 640
         cls_dict = self._class_dict_construct(np.array(data))
 
         return cls_dict
@@ -527,3 +531,4 @@ if __name__ == "__main__":
     for cls, preds in predictions.items():
         print(f"Class {cls}: {preds.shape[0]} predictions")
         print(preds.shape)
+        print(np.max(preds[:, 0]), np.min(preds[:, 0]))
