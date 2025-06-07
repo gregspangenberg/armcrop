@@ -5,7 +5,7 @@ import pathlib
 from typing import Tuple, List, Dict
 from math import ceil
 from networkx.utils.union_find import UnionFind
-from armcrop.base_crop import BaseCrop
+from armcrop.detect import Detector
 
 
 def non_max_suppression_rotated(prediction, conf_thres, iou_thres) -> List[np.ndarray]:
@@ -388,7 +388,7 @@ def iou_volume(class_dict, c, vol, iou_threshold=0.1, z_iou_interval=50, z_lengt
     return ds_sets
 
 
-class OBBCrop2Bone(BaseCrop):
+class OBBCrop2Bone(Detector):
     """
     Aligns oriented bounding box volumes to bones in the input volume
 
@@ -561,13 +561,13 @@ class OBBCrop2Bone(BaseCrop):
 
         """
         obbs_list = []
-        xyz_groups = self._bounding_boxes_rotated(
+        xyz_idx_groups = self._bounding_boxes_rotated(
             c_idx, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
         )
-        for xyz in xyz_groups:
+        for xyz_idx in xyz_idx_groups:
             # Create boolean image marking box vertices
             zyx_bool = np.zeros(np.flip(self.vol.GetSize()))
-            zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
+            zyx_bool[xyz_idx[:, 2], xyz_idx[:, 1], xyz_idx[:, 0]] = 1
             zyx_bool = sitk.GetImageFromArray(zyx_bool)
             zyx_bool.CopyInformation(self.vol)
             zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
@@ -584,6 +584,43 @@ class OBBCrop2Bone(BaseCrop):
             obbs_list.append(obb_filter)
 
         return obbs_list
+
+    def _obb_centroids(
+        self,
+        c_idx: int,
+        iou_threshold: float,
+        z_iou_interval: int,
+        z_length_min: int,
+        xy_padding: int,
+        z_padding: int,
+    ) -> List[List[float]] | List:
+        """
+        Get the centroids of the oriented bounding boxes for the specified class index.
+
+        Args:
+            c_idx: Class index to get oriented bounding box centroids for.
+            iou_threshold: IoU threshold for grouping bounding boxes in the z direction.
+            z_iou_interval: The z-interval in mm for grouping bounding boxes in the z direction.
+            z_length_min: The minimum length in mm for a group of overlapping bounding boxes to be considered a detected object.
+            z_padding: The padding in mm to add to the z dimension of the aligned image.
+            xy_padding: The padding in mm to add to the xy dimensions of the aligned image.
+
+        Returns:
+            List of centroids for the specified class index.
+        """
+        xyz_idx_groups = self._bounding_boxes_rotated(
+            c_idx, iou_threshold, z_iou_interval, z_length_min, xy_padding, z_padding
+        )
+
+        centroids_mms = []
+        for xyz_idx in xyz_idx_groups:
+            # Calculate the centroid of the oriented bounding box
+            xyz_idx = xyz_idx.reshape(-1, 4, 3)
+            centroids_idx = np.mean(xyz_idx, axis=1).astype(int)
+            centroids_mms.append(
+                [self.vol.TransformIndexToPhysicalPoint(c.tolist()) for c in centroids_idx]
+            )
+        return centroids_mms
 
     def _align(
         self,
@@ -820,3 +857,5 @@ if __name__ == "__main__":
     ):
         sitk.WriteImage(img, f"test-obb-{i}.nrrd")
     print(f"Time taken: {time.time() - t0:.2f} seconds")
+    cents = obb_crop._obb_centroids(2, 0.2, 70, 70, 20, 20)
+    print(cents)

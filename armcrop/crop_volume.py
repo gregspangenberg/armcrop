@@ -6,7 +6,7 @@ from networkx.utils.union_find import UnionFind
 from typing import List
 
 import SimpleITK as sitk
-from armcrop.base_crop import BaseCrop
+from armcrop.detect import Detector
 
 
 def i_within_x_mm(target_i, mm, spacing, start_i, stop_i):
@@ -280,7 +280,7 @@ def post_process_volume(
     return crop_classes
 
 
-class Crop2Bone(BaseCrop):
+class Crop2Bone(Detector):
     """
     Crops a bounding box volume to the bone of interest.
 
