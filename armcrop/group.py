@@ -5,23 +5,23 @@ import numpy as np
 from collections import defaultdict
 
 
-class GroupsDetector:
-    def __init__(self, detector: YOLODetector):
+class UniqueObjectProcessor:
+    def __init__(self, detector: YOLODetector, volume: sitk.Image):
         self.detector = detector
+        self.volume_z_spacing = volume.GetSpacing()[2]
 
     def objects(
         self,
-        volume,
-        detection_confidence,
-        detection_iou,
         grouping_iou,
         grouping_interval,
         grouping_min_depth,
     ):
 
-        detections = self.detector.predict(volume, detection_confidence, detection_iou)
+        detections = self.detector.results
+        if detections == {}:
+            raise ValueError("No detections found. Please run the detector first.")
         box_groups = self._groups(
-            detections, grouping_iou, grouping_interval, volume.GetSpacing()[2], grouping_min_depth
+            detections, grouping_iou, grouping_interval, self.volume_z_spacing, grouping_min_depth
         )
         return box_groups
 
@@ -91,7 +91,7 @@ class GroupsDetector:
             for group in ds_sets:
                 if len(group) < discard_length:
                     continue
-                groups_xyz4[class_idx].append(xyz4s[group, :])
+                groups_xyz4[class_idx].append(xyz4s[group, :].astype(int))
 
         return groups_xyz4
 
@@ -160,17 +160,19 @@ class GroupsDetector:
 
 
 if __name__ == "__main__":
+    # load a volume
+    volume = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
     # Example usage
     detector = YOLODetector(model_type="yolo11-obb")
-    groups_detector = GroupsDetector(detector)
-    volume = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
-    conf_threshold = 0.5
-    iou_threshold = 0.5
+
+    detector.predict(
+        volume,
+        confidence_threshold=0.5,
+        iou_threshold=0.5,
+    )
+    groups_detector = UniqueObjectProcessor(detector, volume)
 
     groups_detector.objects(
-        volume,
-        detection_confidence=conf_threshold,
-        detection_iou=iou_threshold,
         grouping_iou=0.2,  # Example IOU threshold for grouping
         grouping_interval=50,  # Example interval
         grouping_min_depth=20,  # Example minimum depth for grouping

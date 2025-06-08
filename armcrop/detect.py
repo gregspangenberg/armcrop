@@ -27,6 +27,7 @@ class Detector(abc.ABC):
         self.img_size = img_size
         self.model = None
         self.model_type = model_type
+        self.results = {}
 
     def format_volume(self, volume: sitk.Image, img_size=(640, 640)) -> sitk.Image:
         """
@@ -339,8 +340,9 @@ class YOLODetector(Detector):
         # organize predictions by class
         # output is z, xywhr, confidence, class_id,
         cls_dict = self._class_dict_construct(np.array(data))
+        self.results = cls_dict
 
-        return cls_dict
+        return self.results
 
 
 if __name__ == "__main__":
