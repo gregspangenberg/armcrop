@@ -11,14 +11,15 @@ class ModelManager:
     """
 
     _instances: Dict[str, "ModelManager"] = {}
+    _available_models = ["yolo11-obb", "yolo9-bb"]  # corresponds to name in _get_model_path
 
     @classmethod
-    def get_instance(cls, model_type="default"):
+    def get_instance(cls, model_type):
         if model_type not in cls._instances:
             cls._instances[model_type] = cls(model_type)
         return cls._instances[model_type]
 
-    def __init__(self, model_type="default"):
+    def __init__(self, model_type):
         self.model = None
         self.model_type = model_type
         self.img_size = (640, 640)
@@ -59,17 +60,21 @@ class ModelManager:
 
     def _get_model_path(self):
         """Get the appropriate model path based on model_type"""
-        if self.model_type == "obb":
+        if self.model_type == self._available_models[0]:  # yolo11-obb
             return pathlib.Path(
                 huggingface_hub.hf_hub_download(
                     repo_id="gregspangenberg/armcrop",
                     filename="upperarm_yolo11_obb_6.onnx",
                 )
             )
-        else:  # default
+        elif self.model_type == self._available_models[1]:  # yolo9-bb
             return pathlib.Path(
                 huggingface_hub.hf_hub_download(
                     repo_id="gregspangenberg/armcrop",
                     filename="yolov9c_upperlimb.onnx",
                 )
+            )
+        else:
+            raise ValueError(
+                f"Unsupported model type: {self.model_type}\n Available types: {self._available_models}"
             )
