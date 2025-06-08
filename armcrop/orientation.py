@@ -9,3 +9,8 @@ class Orient:
 class Crop:
     def __init__(self, detector: Detector):
         self.detector = detector
+
+
+class Centroids:
+    def __init__(self, detector: Detector):
+        self.detector = detector

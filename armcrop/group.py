@@ -2,58 +2,161 @@ from armcrop.detect import Detector, YOLODetector
 from networkx.utils.union_find import UnionFind
 import SimpleITK as sitk
 import numpy as np
+from collections import defaultdict
 
 
 class GroupsDetector:
     def __init__(self, detector: YOLODetector):
         self.detector = detector
 
-    def objects(self, volume, detection_confidence, detection_iou, grouping_iou, grouping_interval):
+    def objects(
+        self,
+        volume,
+        detection_confidence,
+        detection_iou,
+        grouping_iou,
+        grouping_interval,
+        grouping_min_depth,
+    ):
 
         detections = self.detector.predict(volume, detection_confidence, detection_iou)
-        self._groups(detections, grouping_iou, grouping_interval, volume.GetSpacing()[2])
+        box_groups = self._groups(
+            detections, grouping_iou, grouping_interval, volume.GetSpacing()[2], grouping_min_depth
+        )
+        return box_groups
 
-    def _groups(self, detections, iou, interval, spacing_z):
+    def _groups(self, detections, iou, interval, spacing_z, discard_zlength):
         """
         Group detected objects based on their spatial proximity.
         """
         # convert the interval in mm to the number of slices
         interval = int(interval / spacing_z)
-        print(f"Interval in slices: {interval}")
+        discard_length = int(discard_zlength / spacing_z)
         # loop over the classes in the detections
+        groups_xyz4 = defaultdict(list)
         for class_idx in detections:
             # detections are in the format (z, x, y, w, h, rotation, confidence, class_id)
             # ensure array is ordered by z
             sorted_detections = sorted(detections[class_idx], key=lambda z: z[0])
             zs, xywhrs, _ = np.split(sorted_detections, [1, 6], axis=1)
 
-            idxs = np.arange(len(zs))
+            idxs = np.arange(zs.shape[0])
             matches = {}
+            xyz4s = []
             for i in idxs:
+                # get the z, xywhr for the current detection
                 z = zs[i]
                 xywhr = xywhrs[i].reshape(1, -1)
+                # convert to xyz4 format
+                xyxyxyxy = self._xywhr2xyxyxyxy(xywhr, round=True, pad=0)
+                # add in z coordinate
+                xyzxyzxyzxyz = np.concatenate([xyxyxyxy, np.full((1, 4, 1), z)], axis=-1)
+                xyz4s.append(xyzxyzxyzxyz)
 
                 # find nearby zs within the interval
-                zs_nearby = ((zs >= z - interval) & (zs <= z + interval)).flatten()
-                xywhr_nearby = xywhrs[zs_nearby]
+                z_nearby_mask = ((zs >= z - interval) & (zs <= z + interval)).flatten()
+                nearby_indices = np.where(z_nearby_mask)[
+                    0
+                ]  # Get original indices where mask is True
+                xywhr_nearby = xywhrs[z_nearby_mask]
 
                 # calculate IOU with nearby detections
                 ious = np.triu(self.detector._batch_probiou(xywhr, xywhr_nearby), 1)
                 pick = (ious > iou).flatten()
-                matches[i] = np.where(zs_nearby)[0][pick]
+
+                # Store the original indices that match
+                if len(pick) > 0 and np.any(pick):
+                    matches[i] = nearby_indices[pick]
+                else:
+                    matches[i] = np.array([], dtype=int)
+
+            # Concatenate all xyz4s
+            xyz4s = np.concatenate(xyz4s, axis=0)
 
             # find overlapping unions
             ds = UnionFind()
-            for gp in matches.values():
-                ds.union(*gp)
-            ds_sets = sorted([sorted(s) for s in ds.to_sets()], key=len, reverse=True)
+            # Initialize all nodes in the UnionFind
+            for i in idxs:
+                ds[i]  # This ensures all indices are present in the UnionFind
 
-            print(f"Class {class_idx} detected groups: {len(ds_sets)}")
+            # Now create the unions based on matches
+            for i, match_indices in matches.items():
+                for j in match_indices:
+                    if i != j:  # Don't union a node with itself
+                        ds.union(i, j)
+
+            # Get the sets from the UnionFind
+            ds_sets = sorted([sorted(s) for s in ds.to_sets() if len(s) > 0], key=len, reverse=True)
+
             for group in ds_sets:
-                print(f"detected: {len(group)}")
+                if len(group) < discard_length:
+                    continue
+                groups_xyz4[class_idx].append(xyz4s[group, :])
 
-            # z_arr is a list of detections at a specific z level
-            # sliding window to previous zs and next zs
+        return groups_xyz4
+
+    def _xywhr2xyxyxyxy(self, x, round=True, pad=0):
+        """
+        Convert batched Oriented Bounding Boxes (OBB) from [xywh, rotation] to [xy1, xy2, xy3, xy4].
+        Where xy1 is the top-left corner, xy2 is the top-right corner, xy3 is the bottom-right corner, and xy4 is the bottom-left corner.
+
+        Args:
+            x (numpy.ndarray): Boxes in [cx, cy, w, h, rotation] format of shape (n, 5) or (b, n, 5).
+
+        Returns:
+            (numpy.ndarray): Converted corner points of shape (n, 4, 2) or (b, n, 4, 2).
+        """
+
+        def round2pminf_add_remainder(x, r):
+            return np.copysign(np.ceil(np.abs(x) + r), x)
+
+        def regularize_rboxes(rboxes):
+            """
+            Regularize rotated boxes in range [0, pi/2].
+
+            Args:
+                rboxes (numpy.ndarray): Input boxes of shape(N, 5) in xywhr format.
+
+            Returns:
+                (numpy.ndarray): The regularized boxes.
+            """
+            x, y, w, h, t = np.split(rboxes, 5, axis=-1)
+            w_ = np.where(w > h, w, h)
+            h_ = np.where(w > h, h, w)
+            t = np.where(w > h, t, t + np.pi / 2) % np.pi
+            return np.concatenate([x, y, w_, h_, t], axis=-1)  # regularized boxes
+
+        # Regularize the input boxes first
+        rboxes = regularize_rboxes(x)
+
+        ctr = rboxes[..., :2]
+        w, h, angle = (rboxes[..., i : i + 1] for i in range(2, 5))
+
+        # add padding to the width and height
+        w += pad
+        h += pad
+
+        cos_value = np.cos(angle)
+        sin_value = np.sin(angle)
+
+        vec1 = np.concatenate([w / 2 * cos_value, w / 2 * sin_value], axis=-1)
+        vec2 = np.concatenate([-h / 2 * sin_value, h / 2 * cos_value], axis=-1)
+
+        # round to the nearest pixel
+        if round:
+            rem = np.remainder(ctr, np.floor(ctr))
+            ctr = np.floor(ctr)
+            pt1 = ctr + round2pminf_add_remainder(vec1 + vec2, rem)
+            pt2 = ctr + round2pminf_add_remainder(vec1 - vec2, rem)
+            pt3 = ctr - round2pminf_add_remainder(vec1 - vec2, rem)
+            pt4 = ctr - round2pminf_add_remainder(vec1 + vec2, rem)
+        else:
+            pt1 = ctr + vec1 + vec2
+            pt2 = ctr + vec1 - vec2
+            pt3 = ctr - vec1 - vec2
+            pt4 = ctr - vec1 + vec2
+
+        return np.stack([pt1, pt2, pt3, pt4], axis=-2)
 
 
 if __name__ == "__main__":
@@ -70,4 +173,5 @@ if __name__ == "__main__":
         detection_iou=iou_threshold,
         grouping_iou=0.2,  # Example IOU threshold for grouping
         grouping_interval=50,  # Example interval
+        grouping_min_depth=20,  # Example minimum depth for grouping
     )
