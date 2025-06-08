@@ -146,7 +146,7 @@ class OBBDetector(Detector):
     """
 
     def __init__(self, img_size=(640, 640)):
-        super().__init__(img_size, model_type="obb")
+        super().__init__(img_size, model_type="default")
 
     def nms_rotated_batch(self, prediction, conf_thres, iou_thres) -> List[np.ndarray]:
         """
@@ -193,6 +193,8 @@ class OBBDetector(Detector):
             box = x[:, :4]  # xywh
             cls = x[:, 4:mi]  # classes
             rot = x[:, mi : mi + 1]  # rotation
+            if rot.shape[1] == 0:  # if rotation is not present, add a column of zeros
+                rot = np.zeros((box.shape[0], 1), dtype=np.float32)
             conf = np.max(cls, axis=1, keepdims=True)
             class_id = np.argmax(cls, axis=1, keepdims=True)
 
@@ -210,14 +212,14 @@ class OBBDetector(Detector):
 
         return output
 
-    def _nms_rotated(self, boxes, scores, threshold=0.45) -> np.ndarray:
+    def _nms_rotated(self, boxes, scores, threshold) -> np.ndarray:
         """
         NMS for oriented bounding boxes using probiou and fast-nms.
 
         Args:
             boxes (np.ndarray): Rotated bounding boxes, shape (N, 5), format xywhr.
             scores (np.ndarray): Confidence scores, shape (N,).
-            threshold (float, optional): IoU threshold. Defaults to 0.45.
+            threshold (float, optional): IoU threshold
 
         Returns:
             (np.ndarray): Indices of boxes to keep after NMS.
@@ -232,6 +234,7 @@ class OBBDetector(Detector):
 
         ious = np.triu(self._batch_probiou(boxes, boxes), 1)
         # Filter boxes based on IOU threshold to remove overlapping detections
+
         pick = np.nonzero(ious.max(axis=0) < threshold)[0]
 
         return sorted_idx[pick]
@@ -337,6 +340,11 @@ class OBBDetector(Detector):
             output = model.run(None, {"images": arr})[0]
 
             # perform non-max supression on the output
+            # add column of zeroes for rotation
+            # bb = True
+            # if bb:
+            #     output = np.c_[output[:,:, :4], np.zeros((output.shape[0], 1)), output[:, 4:]]
+
             preds = self.nms_rotated_batch(output, conf_thres, iou_thres)[0]
             # add the z coordinate to the predictions
             preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
@@ -351,8 +359,6 @@ class OBBDetector(Detector):
 
 
 class BBDetector(Detector):
-    """incomplete"""
-
     """
     Detector for cropping volumes using a Bounding Box (BB) model.
     """
@@ -360,7 +366,7 @@ class BBDetector(Detector):
     def __init__(self, img_size=(640, 640)):
         super().__init__(img_size, model_type="default")
 
-    def _compute_iou(self, box, boxes):
+    def _iou(self, box, boxes):
         # Compute xmin, ymin, xmax, ymax for both boxes
         xmin = np.maximum(box[0], boxes[:, 0])
         ymin = np.maximum(box[1], boxes[:, 1])
@@ -412,7 +418,7 @@ class BBDetector(Detector):
             keep_boxes.append(box_id)
 
             # Compute IoU of the picked box with the rest
-            ious = self._compute_iou(boxes[box_id, :], boxes[sorted_indices[1:], :])
+            ious = self._iou(boxes[box_id, :], boxes[sorted_indices[1:], :])
 
             # Remove boxes with IoU over the threshold
             keep_indices = np.where(ious < iou_threshold)[0]
@@ -435,13 +441,13 @@ class BBDetector(Detector):
 
         return keep_boxes
 
-    def _unique_encompassing_boxes(self, boxes, scores, class_ids, indices, iou_threshold=0.1):
+    def _unique_encompassing_boxes(self, boxes, scores, class_ids, indices, iou_threshold):
         # iterate over the nms boxes
         encompassing_boxes = []
         for b_nms, s_nms, c_nms in zip(boxes[indices], scores[indices], class_ids[indices]):
             # compute iou for the nms box with all other boxes in class
             boxes_class = boxes[np.where(class_ids == c_nms)[0], :]
-            ious = self._compute_iou(b_nms, boxes_class)
+            ious = self._iou(b_nms, boxes_class)
             iou_indicies = np.where(ious > iou_threshold)[0]
             boxes_intersect = boxes_class[iou_indicies, :]
             # construct biggest box that encompasses all intersecting boxes
@@ -454,7 +460,7 @@ class BBDetector(Detector):
         encompassing_boxes = np.vstack(encompassing_boxes)
         return encompassing_boxes, scores[indices], class_ids[indices]
 
-    def _post_process_image(self, output, conf_threshold=0.5, iou_threshold=0.5):
+    def _post_process_image(self, output, conf_threshold, iou_supress, iou_combine) -> np.ndarray:
         predictions = np.squeeze(output[0]).T
 
         # Filter out object confidence scores below threshold
@@ -463,7 +469,7 @@ class BBDetector(Detector):
         scores = scores[scores > conf_threshold]
 
         if len(scores) == 0:
-            return [], [], []
+            return np.c_[[], [], []]
 
         # Get the class with the highest confidence
         class_ids = np.argmax(predictions[:, 4:], axis=1)
@@ -472,13 +478,13 @@ class BBDetector(Detector):
         boxes = self._extract_boxes(predictions)
 
         # Apply non-maxima suppression to suppress weak, overlapping bounding boxes
-        indices = self._multiclass_nms(boxes, scores, class_ids, iou_threshold)
+        indices = self._multiclass_nms(boxes, scores, class_ids, iou_supress)
 
         boxes, scores, class_ids = self._unique_encompassing_boxes(
-            boxes, scores, class_ids, indices
+            boxes, scores, class_ids, indices, (iou_combine)
         )
 
-        return boxes, scores, class_ids
+        return np.c_[boxes, scores, class_ids]
 
     def predict(
         self, volume: pathlib.Path | sitk.Image, conf_thres, iou_thres
@@ -508,9 +514,9 @@ class BBDetector(Detector):
             output = model.run(None, {"images": arr})[0]
 
             # perform non-max supression on the output
-            preds = self._post_process_image(output, conf_thres, iou_thres)
+            preds = self._post_process_image(output, conf_thres, iou_thres, iou_thres / 2)
             # add the z coordinate to the predictions
-            preds = np.c_[preds[0], preds[1], preds[2], np.ones((len(preds[0]), 1)) * z]
+            preds = np.c_[preds, np.ones((preds.shape[0], 1)) * z]
             data.extend(preds)
         # organize predictions by class
         # output is xyxy, confidence, class_id, z
@@ -522,7 +528,7 @@ class BBDetector(Detector):
 
 if __name__ == "__main__":
     # Example usage
-    detector = OBBDetector()
+    detector = BBDetector()
     volume_path = pathlib.Path("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
     conf_threshold = 0.5
     iou_threshold = 0.5
