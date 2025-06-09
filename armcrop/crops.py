@@ -51,10 +51,17 @@ class Crop(CropBase):
         self.interpolator = sitk.sitkBSpline
 
     def _boolean_volume(self, xyz4):
-        """Convert the volume to a boolean mask."""
-        # Create boolean image marking box vertices
+        """Convert the xyz boxes to a boolean mask of all vertices, handles out of bounds errors."""
+
         # reshape from (n, 4, 3) to (n, 3)
         xyz = xyz4.reshape(-1, 3)
+
+        # clip along x,y,z axes to ensure we don't go out of bounds
+        xyz[:, 0] = np.clip(xyz[:, 0], 0, self.volume.GetSize()[0] - 1)
+        xyz[:, 1] = np.clip(xyz[:, 1], 0, self.volume.GetSize()[1] - 1)
+        xyz[:, 2] = np.clip(xyz[:, 2], 0, self.volume.GetSize()[2] - 1)
+
+        # we are flipping the axes to match the sitk coordinate system
         zyx_bool = np.zeros(np.flip(self.volume.GetSize()))
         zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
         zyx_bool = sitk.GetImageFromArray(zyx_bool)
@@ -238,10 +245,10 @@ class Centroids(CropBase):
 
 
 if __name__ == "__main__":
-    volume = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
-    OBB = False
+    volume = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/09-12052L/09-12052L.nrrd")
+    OBB = True
     CENTROID = False
-    CROP = True
+    CROP = False
     if OBB:
         cropper = CropOriented(
             volume,
@@ -249,7 +256,7 @@ if __name__ == "__main__":
             detection_iou=0.2,
         )
         output = cropper.process(
-            bone="humerus",
+            bone="scapula",
             grouping_iou=0.2,
             grouping_interval=50,
             grouping_min_depth=20,

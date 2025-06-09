@@ -37,6 +37,9 @@ class UniqueObjectProcessor:
         for class_idx in detections:
             # detections are in the format (z, x, y, w, h, rotation, confidence, class_id)
             # ensure array is ordered by z
+            if detections[class_idx] is None:
+                continue
+            print(f"Processing class {class_idx} with {len(detections[class_idx])} detections")
             sorted_detections = sorted(detections[class_idx], key=lambda z: z[0])
             zs, xywhrs, _ = np.split(sorted_detections, [1, 6], axis=1)
 
