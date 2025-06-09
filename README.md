@@ -31,34 +31,14 @@ import SimpleITK as sitk
 volume = sitk.ReadImage("path/to/ct_scan.nrrd")
 
 # Oriented Bounding Box Cropping
-cropper = armcrop.CropOrientedBoundingBox(
-    volume,
-    detection_confidence = 0.5,
-    detection_io = 0.5,
-)
-cropped_images = cropper.process(
-    bone = "humerus", 
-    grouping_iou = 0.2,
-    grouping_interval= 50,
-    grouping_min_depth = 20,
-    spacing= (0.5,0.5,0.5)
-)
-for i, img, in enumerate(cropped_images):
+cropper = armcrop.CropOrientedBoundingBox(volume)
+cropped_images = cropper.process(bone="humerus")
+for i, img in enumerate(cropped_images):
     sitk.WriteImage(img, f"aligned_humerus-{i}.nrrd")
 
 # Bounding Box Cropping
-cropper = Crop(
-    volume,
-    detection_confidence=0.2,
-    detection_iou=0.2,
-)
-output = cropper.process(
-    bone="humerus",
-    grouping_iou=0.2,
-    grouping_interval=50,
-    grouping_min_depth=20,
-    spacing=(0.5, 0.5, 0.5),
-)
+cropper = armcrop.Crop(volume)
+output = cropper.process(bone="scapula")
 for i, img in enumerate(output):
-    sitk.WriteImage(img, f"cropped_humerus-{i}.nrrd")
+    sitk.WriteImage(img, f"cropped_scapula-{i}.nrrd")
 
