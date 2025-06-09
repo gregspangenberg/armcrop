@@ -2,7 +2,7 @@ from armcrop.group import UniqueObjectProcessor
 from armcrop.detect import YOLODetector
 import abc
 import SimpleITK as sitk
-from pathlib import Path
+from typing import List
 import numpy as np
 from math import ceil
 
@@ -26,12 +26,12 @@ class CropBase(abc.ABC):
             detection_iou (float): IOU threshold for the YOLO detector.
         """
 
-        self.volume = volume
+        self._volume = volume
 
         # Using id(volume) for the cache key. This assumes that for the "same" volume,
         # the exact same sitk.Image object instance is used.
         # If not, a more robust key based on volume properties would be needed.
-        cache_key = (id(self.volume), float(detection_confidence), float(detection_iou))
+        cache_key = (id(self._volume), float(detection_confidence), float(detection_iou))
 
         if cache_key in CropBase._detector_cache:
             self._det = CropBase._detector_cache[cache_key]
@@ -45,10 +45,10 @@ class CropBase(abc.ABC):
 
             # print(f"Creating new detector for volume ID {id(self.volume)} and params ({detection_confidence}, {detection_iou})") # Optional: for debugging
             self._det = YOLODetector()
-            self._det.predict(self.volume, detection_confidence, detection_iou)
+            self._det.predict(self._volume, detection_confidence, detection_iou)
             CropBase._detector_cache[cache_key] = self._det
 
-        self._uop = UniqueObjectProcessor(self._det, self.volume)
+        self._uop = UniqueObjectProcessor(self._det, self._volume)
         self._lblmap = {
             "clavicle": 0,
             "scapula": 1,
@@ -76,19 +76,19 @@ class Crop(CropBase):
         xyz = xyz4.reshape(-1, 3)
 
         # clip along x,y,z axes to ensure we don't go out of bounds
-        xyz[:, 0] = np.clip(xyz[:, 0], 0, self.volume.GetSize()[0] - 1)
-        xyz[:, 1] = np.clip(xyz[:, 1], 0, self.volume.GetSize()[1] - 1)
-        xyz[:, 2] = np.clip(xyz[:, 2], 0, self.volume.GetSize()[2] - 1)
+        xyz[:, 0] = np.clip(xyz[:, 0], 0, self._volume.GetSize()[0] - 1)
+        xyz[:, 1] = np.clip(xyz[:, 1], 0, self._volume.GetSize()[1] - 1)
+        xyz[:, 2] = np.clip(xyz[:, 2], 0, self._volume.GetSize()[2] - 1)
 
         # we are flipping the axes to match the sitk coordinate system
-        zyx_bool = np.zeros(np.flip(self.volume.GetSize()))
+        zyx_bool = np.zeros(np.flip(self._volume.GetSize()))
         zyx_bool[xyz[:, 2], xyz[:, 1], xyz[:, 0]] = 1
         zyx_bool = sitk.GetImageFromArray(zyx_bool)
-        zyx_bool.CopyInformation(self.volume)
+        zyx_bool.CopyInformation(self._volume)
         zyx_bool = sitk.Cast(zyx_bool, sitk.sitkUInt8)
         return zyx_bool
 
-    def filters(self, box_groups):
+    def _filters(self, box_groups):
         filters = []
         for box_group in box_groups:
             if len(box_group) == 0:
@@ -104,13 +104,13 @@ class Crop(CropBase):
     def _process(self, box_groups, spacing):
         cropped_imgs = []
         # get boolean mask of box vertices
-        bb_filters = self.filters(box_groups)
+        bb_filters = self._filters(box_groups)
         for bb_filter in bb_filters:
             # crop the image using the bounding box
             boundingbox = bb_filter.GetBoundingBox(1)
             roi_filter = sitk.RegionOfInterestImageFilter()
             roi_filter.SetRegionOfInterest(boundingbox)
-            crop_img = roi_filter.Execute(self.volume)
+            crop_img = roi_filter.Execute(self._volume)
             # resample the cropped image to the desired spacing
             resampler = sitk.ResampleImageFilter()
             resampler.SetOutputDirection(crop_img.GetDirection())
@@ -136,7 +136,7 @@ class Crop(CropBase):
         grouping_interval: int = 40,
         grouping_min_depth: int = 50,
         spacing: tuple = (0.5, 0.5, 0.5),
-    ):
+    ) -> List[sitk.Image]:
         """
         Process the volume for the requested bone.
 
@@ -164,7 +164,7 @@ class CropOriented(Crop):
     def __init__(self, volume, detection_confidence=0.5, detection_iou=0.5):
         super().__init__(volume, detection_confidence, detection_iou)
 
-    def filters(self, box_groups):
+    def _filters(self, box_groups):
         filters = []
         for box_group in box_groups:
             if len(box_group) == 0:
@@ -182,7 +182,7 @@ class CropOriented(Crop):
     def _process(self, box_groups, spacing):
         aligned_imgs = []
         # get boolean mask of box vertices
-        obb_filters = self.filters(box_groups)
+        obb_filters = self._filters(box_groups)
         for obb_filter in obb_filters:
             aligned_img_dir = (
                 np.array(obb_filter.GetOrientedBoundingBoxDirection(1))
@@ -208,7 +208,7 @@ class CropOriented(Crop):
             resampler.SetDefaultPixelValue(-1023)
 
             # get the aligned image, and its array
-            aligned_img = resampler.Execute(self.volume)
+            aligned_img = resampler.Execute(self._volume)
 
             aligned_imgs.append(aligned_img)
         return aligned_imgs
@@ -218,7 +218,7 @@ class Centroids(CropBase):
     def __init__(self, volume, detection_confidence=0.5, detection_iou=0.5):
         super().__init__(volume, detection_confidence, detection_iou)
 
-    def _process(self, box_groups):
+    def _process(self, box_groups) -> List[np.ndarray]:
         """Calculate the centroids of the detected boxes."""
         centroids = []
         for box_group in box_groups:
@@ -226,12 +226,13 @@ class Centroids(CropBase):
                 continue
             # Calculate the centroid of each box
             centroid_idx = np.mean(box_group, axis=1).astype(int)
+            centroids_obj = []
             for ci in centroid_idx:
-                ci_mm = self.volume.TransformIndexToPhysicalPoint(ci.tolist())
+                ci_mm = self._volume.TransformIndexToPhysicalPoint(ci.tolist())
                 # ci2 = self.volume.TransformPhysicalPointToIndex(ci_mm)
                 # print(ci, ci_mm, ci2)
-                centroids.append(ci_mm)
-        centroids = np.array(centroids)
+                centroids_obj.append(ci_mm)
+            centroids.append(np.array(centroids_obj))
         return centroids
 
     def process(
@@ -240,7 +241,7 @@ class Centroids(CropBase):
         grouping_iou: float = 0.5,
         grouping_interval: int = 40,
         grouping_min_depth: int = 50,
-    ):
+    ) -> List[np.ndarray]:
         """
         Process the volume to get centroids of detected boxes.
 
