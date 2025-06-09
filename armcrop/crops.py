@@ -8,9 +8,12 @@ from math import ceil
 
 
 class CropBase(abc.ABC):
+    _detector_cache = {}  # Class-level cache for YOLODetector instances
+    _MAX_CACHE_SIZE = 1  # Maximum number of items in the cache
+
     def __init__(
         self,
-        volume: sitk.Image | Path | str,
+        volume: sitk.Image,
         detection_confidence: float = 0.5,
         detection_iou: float = 0.5,
     ):
@@ -18,17 +21,33 @@ class CropBase(abc.ABC):
         Initialize the cropper with a volume.
 
         Args:
-            volume (sitk.Image | Path | str): The volume to be cropped, can be a SimpleITK image or a file path.
+            volume (sitk.Image): The volume to be cropped. Must be a SimpleITK image.
+            detection_confidence (float): Confidence threshold for the YOLO detector.
+            detection_iou (float): IOU threshold for the YOLO detector.
         """
-        if isinstance(volume, (Path, str)):
-            self.volume = sitk.ReadImage(str(volume))
-        elif isinstance(volume, sitk.Image):
-            self.volume = volume
-        else:
-            raise TypeError("Volume must be a SimpleITK Image or a file path.")
 
-        self._det = YOLODetector()
-        self._det.predict(self.volume, detection_confidence, detection_iou)
+        self.volume = volume
+
+        # Using id(volume) for the cache key. This assumes that for the "same" volume,
+        # the exact same sitk.Image object instance is used.
+        # If not, a more robust key based on volume properties would be needed.
+        cache_key = (id(self.volume), float(detection_confidence), float(detection_iou))
+
+        if cache_key in CropBase._detector_cache:
+            self._det = CropBase._detector_cache[cache_key]
+            # print(f"Reusing cached detector for volume ID {id(self.volume)} and params ({detection_confidence}, {detection_iou})") # Optional: for debugging
+        else:
+            # If the cache is full (i.e., contains _MAX_CACHE_SIZE items)
+            # and we are about to add a new, different item, clear the cache first.
+            if len(CropBase._detector_cache) >= CropBase._MAX_CACHE_SIZE:
+                # print(f"Cache limit ({CropBase._MAX_CACHE_SIZE}) reached. Clearing cache before adding new item.") # Optional: for debugging
+                CropBase._detector_cache.clear()
+
+            # print(f"Creating new detector for volume ID {id(self.volume)} and params ({detection_confidence}, {detection_iou})") # Optional: for debugging
+            self._det = YOLODetector()
+            self._det.predict(self.volume, detection_confidence, detection_iou)
+            CropBase._detector_cache[cache_key] = self._det
+
         self._uop = UniqueObjectProcessor(self._det, self.volume)
         self._lblmap = {
             "clavicle": 0,
@@ -196,8 +215,8 @@ class CropOriented(Crop):
 
 
 class Centroids(CropBase):
-    def __init__(self, volume):
-        super().__init__(volume)
+    def __init__(self, volume, detection_confidence=0.5, detection_iou=0.5):
+        super().__init__(volume, detection_confidence, detection_iou)
 
     def _process(self, box_groups):
         """Calculate the centroids of the detected boxes."""
@@ -246,48 +265,122 @@ class Centroids(CropBase):
 
 if __name__ == "__main__":
     volume = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/09-12052L/09-12052L.nrrd")
+    # Example: Create another reference to the same volume object
+    # volume_ref2 = volume
+    # If you were to load it again:
+    # volume2 = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/09-12052L/09-12052L.nrrd")
+    # Then id(volume) != id(volume2), and caching based on id() would not work across these two.
+
     OBB = True
-    CENTROID = False
-    CROP = False
+    CENTROID = True  # Run both to test caching
+    CROP = True  # Run all three
+    OTHER_SETTINGS = False  # Test with different detection parameters
+    OTHER_VOLUME = True  # Test with a different volume
+
+    det_conf = 0.2
+    det_iou = 0.2
+
+    print(f"Initial cache size: {len(CropBase._detector_cache)}")
+
     if OBB:
-        cropper = CropOriented(
-            volume,
-            detection_confidence=0.2,
-            detection_iou=0.2,
+        print("Processing OBB...")
+        cropper_obb = CropOriented(
+            volume,  # Pass the same volume object
+            detection_confidence=det_conf,
+            detection_iou=det_iou,
         )
-        output = cropper.process(
+        output_obb = cropper_obb.process(
             bone="scapula",
             grouping_iou=0.2,
             grouping_interval=50,
             grouping_min_depth=20,
             spacing=(1.0, 1.0, 1.0),
         )
-        for i, img in enumerate(output):
+        for i, img in enumerate(output_obb):
             sitk.WriteImage(img, f"aligned_{i}.nrrd")
+        print(f"Saved {len(output_obb)} OBB images.")
+        print(f"Cache size after OBB: {len(CropBase._detector_cache)}")
 
-    elif CENTROID:
-        centroider = Centroids(volume)
-        output = centroider.process(
+    if CENTROID:
+        print("Processing Centroids...")
+        # Using the same volume object and detection parameters
+        centroider = Centroids(volume, detection_confidence=det_conf, detection_iou=det_iou)
+        output_centroids = centroider.process(
             "humerus",
             grouping_iou=0.2,
             grouping_interval=50,
             grouping_min_depth=20,
         )
-        for i, centroid in enumerate(output):
-            print(f"Centroid {i}: {centroid}")
+        for i, centroid_val in enumerate(output_centroids):
+            print(f"Centroid {i}: {centroid_val}")
+        print(f"Found {len(output_centroids)} centroids.")
+        print(f"Cache size after Centroids: {len(CropBase._detector_cache)}")
 
-    elif CROP:
-        cropper = Crop(
+    if CROP:
+        print("Processing Axis-Aligned Crop...")
+        # Using the same volume object and detection parameters
+        cropper_axis_aligned = Crop(
             volume,
-            detection_confidence=0.2,
-            detection_iou=0.2,
+            detection_confidence=det_conf,
+            detection_iou=det_iou,
         )
-        output = cropper.process(
+        output_crop = cropper_axis_aligned.process(
             bone="humerus",
             grouping_iou=0.2,
             grouping_interval=50,
             grouping_min_depth=20,
             spacing=(1.0, 1.0, 1.0),
         )
-        for i, img in enumerate(output):
+        for i, img in enumerate(output_crop):
             sitk.WriteImage(img, f"cropped_{i}.nrrd")
+        print(f"Saved {len(output_crop)} cropped images.")
+        print(f"Cache size after Crop: {len(CropBase._detector_cache)}")
+
+    # Example with different detection parameters - this would create a new cache entry
+    if OTHER_SETTINGS:
+        print("Processing OBB with different detection parameters...")
+        cropper_obb_diff_params = CropOriented(
+            volume,  # Same volume object
+            detection_confidence=0.7,  # Different confidence
+            detection_iou=det_iou,
+        )
+        # ... process and use cropper_obb_diff_params ...
+        print(f"Cache size after OBB with different params: {len(CropBase._detector_cache)}")
+
+        print("Processing Centroids with same different parameters...")
+        centroider_diff_params = Centroids(
+            volume,  # Same volume object
+            detection_confidence=0.7,  # Different confidence
+            detection_iou=det_iou,
+        )
+        output_centroids_diff = centroider_diff_params.process(
+            "humerus",
+            grouping_iou=0.2,
+            grouping_interval=50,
+            grouping_min_depth=20,
+        )
+        for i, centroid_val in enumerate(output_centroids_diff):
+            print(f"Centroid {i}: {centroid_val}")
+        print(f"Found {len(output_centroids_diff)} centroids with different params.")
+        print(f"Cache size after Centroids with different params: {len(CropBase._detector_cache)}")
+
+    if OTHER_VOLUME:
+        print("Processing OBB with a different volume...")
+        # Load a different volume
+        volume2 = sitk.ReadImage("/mnt/slowdata/ct/cadaveric-full-arm/1606011L/1606011L.nrrd")
+        cropper_obb_diff_volume = CropOriented(
+            volume2,  # Different volume object
+            detection_confidence=det_conf,
+            detection_iou=det_iou,
+        )
+        output_obb_diff_volume = cropper_obb_diff_volume.process(
+            bone="scapula",
+            grouping_iou=0.2,
+            grouping_interval=50,
+            grouping_min_depth=20,
+            spacing=(1.0, 1.0, 1.0),
+        )
+        for i, img in enumerate(output_obb_diff_volume):
+            sitk.WriteImage(img, f"aligned_diff_{i}.nrrd")
+        print(f"Saved {len(output_obb_diff_volume)} OBB images for the new volume.")
+        print(f"Cache size after OBB with different volume: {len(CropBase._detector_cache)}")
