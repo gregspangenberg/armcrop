@@ -22,5 +22,43 @@ pip install armcrop
 To use CUDA execution you will need to also install torch and onnxruntime-gpu.
 
 
+## Usage
+```python
+import armcrop
+import SimpleITK as sitk
 
+# load CT scan
+volume = sitk.ReadImage("path/to/ct_scan.nrrd")
+
+# Oriented Bounding Box Cropping
+cropper = armcrop.CropOrientedBoundingBox(
+    volume,
+    detection_confidence = 0.5,
+    detection_io = 0.5,
+)
+cropped_images = cropper.process(
+    bone = "humerus", 
+    grouping_iou = 0.2,
+    grouping_interval= 50,
+    grouping_min_depth = 20,
+    spacing= (0.5,0.5,0.5)
+)
+for i, img, in enumerate(cropped_images):
+    sitk.WriteImage(img, f"aligned_humerus-{i}.nrrd")
+
+# Bounding Box Cropping
+cropper = Crop(
+    volume,
+    detection_confidence=0.2,
+    detection_iou=0.2,
+)
+output = cropper.process(
+    bone="humerus",
+    grouping_iou=0.2,
+    grouping_interval=50,
+    grouping_min_depth=20,
+    spacing=(0.5, 0.5, 0.5),
+)
+for i, img in enumerate(output):
+    sitk.WriteImage(img, f"cropped_humerus-{i}.nrrd")
 
